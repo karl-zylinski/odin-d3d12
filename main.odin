@@ -4,17 +4,18 @@ import "core:fmt"
 import SDL "vendor:sdl2"
 import d3d12 "vendor:directx/d3d12"
 import dxgi "vendor:directx/dxgi"
+import d3dc "vendor:directx/d3d_compiler"
 
 BUILD_DEBUG :: true
 NUM_RENDERTARGETS :: 2
 
-success :: proc(res: d3d12.HRESULT) -> bool {
+assert_ok :: proc(res: d3d12.HRESULT, message: string) -> bool {
+    if (res >= 0) {
+        return true;
+    }
 
-	if (res < 0) {
-		fmt.printf("Fail: %0x\n", u32(res))
-	}
-
-	return res >= 0
+	fmt.printf("%v. Error code: %0x\n", message, u32(res))
+    return false;
 }
 
 main :: proc() {
@@ -63,8 +64,7 @@ main :: proc() {
 			flags |= dxgi.CREATE_FACTORY_DEBUG
 		}
 
-		if !success(dxgi.CreateDXGIFactory2(flags, dxgi.IFactory4_UUID, &factory)) {
-			fmt.println("Failed creating factory")
+		if !assert_ok(dxgi.CreateDXGIFactory2(flags, dxgi.IFactory4_UUID, &factory), "Failed creating factory") {
 			return
 		}
 	}
@@ -79,7 +79,7 @@ main :: proc() {
             continue
         }
 
-        if success(d3d12.CreateDevice((^dxgi.IUnknown)(adapter), ._11_0, dxgi.IDevice_UUID, nil)) {
+        if d3d12.CreateDevice((^dxgi.IUnknown)(adapter), ._11_0, dxgi.IDevice_UUID, nil) >= 0 {
             break
         } else {
             fmt.println("Failed to create device")
@@ -92,22 +92,19 @@ main :: proc() {
     }
 
     device: ^d3d12.IDevice
-    device_id :dxgi.IID= {0x189819f1, 0x1db6, 0x4b57, { 0xbe, 0x54, 0x18, 0x21, 0x33, 0x9b, 0x85, 0xf7 }}
 
-    if !success(d3d12.CreateDevice((^dxgi.IUnknown)(adapter),  ._11_0,  &device_id, (^rawptr)(&device))) {
-    	fmt.println("Failed to create device")
+    if !assert_ok(d3d12.CreateDevice((^dxgi.IUnknown)(adapter), ._11_0, d3d12.IDevice_UUID, (^rawptr)(&device)), "Failed to create device") {
     	return
     }
 
-    command_queue_id :dxgi.IID= {0x0ec870a6, 0x5d7e, 0x4c22, { 0x8c, 0xfc, 0x5b, 0xaa, 0xe0, 0x76, 0x16, 0xed }}
+    
     queue: ^d3d12.ICommandQueue
 
     {
     	desc := d3d12.COMMAND_QUEUE_DESC {
     		Type = .DIRECT,
     	}
-        if !success(device->CreateCommandQueue(&desc, &command_queue_id, (^rawptr)(&queue))) {
-        	fmt.println("Failed creating command queue")
+        if !assert_ok(device->CreateCommandQueue(&desc, d3d12.ICommandQueue_UUID, (^rawptr)(&queue)), "Failed creating command queue") {
         	return
         }
     }
@@ -135,15 +132,13 @@ main :: proc() {
             AlphaMode = .UNSPECIFIED,
         };
 
-        if !success(factory->CreateSwapChainForHwnd((^dxgi.IUnknown)(queue), window_handle, &desc, nil, nil, (^^dxgi.ISwapChain1)(&swapchain))) {
-        	fmt.println("Failed to create swap chain");
+        if !assert_ok(factory->CreateSwapChainForHwnd((^dxgi.IUnknown)(queue), window_handle, &desc, nil, nil, (^^dxgi.ISwapChain1)(&swapchain)), "Failed to create swap chain") {
             return;
         }
     }
 
     frame_index := swapchain->GetCurrentBackBufferIndex()
-	descrptor_heap_id :dxgi.IID= {0x8efb471d, 0x616c, 0x4f49, { 0x90, 0xf7, 0x12, 0x7b, 0xb7, 0x63, 0xfa, 0x51 }}
-    rtvDescriptorHeap: ^d3d12.IDescriptorHeap
+    rtv_descriptor_heap: ^d3d12.IDescriptorHeap
 
     {
         desc := d3d12.DESCRIPTOR_HEAP_DESC {
@@ -152,8 +147,192 @@ main :: proc() {
             Flags = .NONE,
         };
 
-        if !success(device->CreateDescriptorHeap(&desc, &descrptor_heap_id, (^rawptr)(&rtvDescriptorHeap))) {
-        	fmt.println("Failed creating descriptor heap")
+        if !assert_ok(device->CreateDescriptorHeap(&desc, d3d12.IDescriptorHeap_UUID, (^rawptr)(&rtv_descriptor_heap)), "Failed creating descriptor heap") {
+            return
+        }
+    }
+
+    targets: [NUM_RENDERTARGETS]^d3d12.IResource
+
+    {
+        rtv_descriptor_size :u32= device->GetDescriptorHandleIncrementSize(.RTV);
+        rtv_descriptor_handle: d3d12.CPU_DESCRIPTOR_HANDLE
+        rtv_descriptor_heap->GetCPUDescriptorHandleForHeapStart(&rtv_descriptor_handle)
+
+        for i :u32= 0; i < NUM_RENDERTARGETS; i += 1 {
+            if !assert_ok(swapchain->GetBuffer(i, d3d12.IResource_UUID, (^rawptr)(&targets[i])), "Failed getting render target") {
+                return;
+            }
+            device->CreateRenderTargetView(targets[i], nil, rtv_descriptor_handle);
+            rtv_descriptor_handle.ptr += uint(rtv_descriptor_size);
+        }
+    }
+
+    command_allocator: ^d3d12.ICommandAllocator
+
+    if !assert_ok(device->CreateCommandAllocator(.DIRECT, d3d12.ICommandAllocator_UUID, (^rawptr)(&command_allocator)), "Failed creating command allocator") {
+        return;
+    }
+
+    root_signature: ^d3d12.IRootSignature 
+
+    {
+        desc := d3d12.VERSIONED_ROOT_SIGNATURE_DESC {
+            Version = ._1_0,
+        };
+
+        desc.Desc_1_0.Flags = .ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT
+
+        serialized_desc: ^d3d12.IBlob
+
+        if !assert_ok(d3d12.SerializeVersionedRootSignature(&desc, &serialized_desc, nil), "Failed to serialize root signature") {
+            return;
+        }
+
+        if !assert_ok(device->CreateRootSignature(0,
+            serialized_desc->GetBufferPointer(),
+            serialized_desc->GetBufferSize(),
+            d3d12.IRootSignature_UUID,
+            (^rawptr)(&root_signature)), "Failed creating root signature") {
+            return;
+        }
+
+        serialized_desc->Release()
+    }
+
+    pipeline: ^d3d12.IPipelineState
+
+    {
+        data :cstring=
+            `struct PSInput {
+               float4 position : SV_POSITION;
+               float4 color : COLOR;
+            };
+            PSInput VSMain(float4 position : POSITION0, float4 color : COLOR0) {
+               PSInput result;
+               result.position = position;
+               result.color = color;
+               return result;
+            }
+            float4 PSMain(PSInput input) : SV_TARGET {
+               return input.color;
+            };`
+
+        data_size :uint= len(data)
+
+        compile_flags :u32= 0
+        when BUILD_DEBUG {
+            compile_flags |= u32(d3dc.D3DCOMPILE.DEBUG)
+            compile_flags |= u32(d3dc.D3DCOMPILE.SKIP_OPTIMIZATION)
+        }
+
+        vs: ^d3d12.IBlob = nil
+        ps: ^d3d12.IBlob = nil
+
+        if !assert_ok(d3dc.Compile(rawptr(data), data_size, nil, nil, nil, "VSMain", "vs_4_0", compile_flags, 0, &vs, nil), "Failed to compile vertex shader") {
+            return;
+        }
+
+        if !assert_ok(d3dc.Compile(rawptr(data), data_size, nil, nil, nil, "PSMain", "ps_4_0", compile_flags, 0, &ps, nil), "Failed to compile pixel shader") {
+            return;
+        }
+
+        vertex_format: []d3d12.INPUT_ELEMENT_DESC = {
+            { 
+                SemanticName = "POSITION", 
+                Format = .R32G32B32_FLOAT, 
+                InputSlotClass = .PER_VERTEX_DATA, 
+            },
+            {   
+                SemanticName = "COLOR", 
+                Format = .R32G32B32A32_FLOAT, 
+                AlignedByteOffset = size_of(f32) * 3, 
+                InputSlotClass = .PER_VERTEX_DATA, 
+            },
+        }
+
+        default_blend_state := d3d12.RENDER_TARGET_BLEND_DESC {
+            BlendEnable = false,
+            LogicOpEnable = false,
+
+            SrcBlend = .ONE,
+            DestBlend = .ZERO,
+            BlendOp = .ADD,
+
+            SrcBlendAlpha = .ONE,
+            DestBlendAlpha = .ZERO,
+            BlendOpAlpha = .ADD,
+
+            LogicOp = .NOOP,
+            RenderTargetWriteMask = u8(d3d12.COLOR_WRITE_ENABLE.ALL),
+        };
+
+        pipeline_state_desc := d3d12.GRAPHICS_PIPELINE_STATE_DESC {
+            pRootSignature = root_signature,
+            VS = {
+                pShaderBytecode = vs->GetBufferPointer(),
+                BytecodeLength = vs->GetBufferSize(),
+            },
+            PS = {
+                pShaderBytecode = ps->GetBufferPointer(),
+                BytecodeLength = ps->GetBufferSize(),
+            },
+            StreamOutput = {},
+            BlendState = {
+                AlphaToCoverageEnable = false,
+                IndependentBlendEnable = false,
+                RenderTarget = { 0 = default_blend_state, 1..7 = {} },
+            },
+            SampleMask = 0xFFFFFFFF,
+            RasterizerState = {
+                FillMode = .SOLID,
+                CullMode = .BACK,
+                FrontCounterClockwise = false,
+                DepthBias = 0,
+                DepthBiasClamp = 0,
+                SlopeScaledDepthBias = 0,
+                DepthClipEnable = true,
+                MultisampleEnable = false,
+                AntialiasedLineEnable = false,
+                ForcedSampleCount = 0,
+                ConservativeRaster = .OFF,
+            },
+            DepthStencilState = {
+                DepthEnable = false,
+                StencilEnable = false,
+            },
+            InputLayout = {
+                pInputElementDescs = &vertex_format[0],
+                NumElements = u32(len(vertex_format)),
+            },
+            PrimitiveTopologyType = .TRIANGLE,
+            NumRenderTargets = 1,
+            RTVFormats = { 0 = .R8G8B8A8_UNORM, 1..7 = .UNKNOWN },
+            DSVFormat = .UNKNOWN,
+            SampleDesc = {
+                Count = 1,
+                Quality = 0,
+            },
+        };
+        
+        if !assert_ok(device->CreateGraphicsPipelineState(&pipeline_state_desc, d3d12.IPipelineState_UUID, (^rawptr)(&pipeline)), "Pipeline creation failed") {
+            return
+        }
+
+        vs->Release()
+        ps->Release()
+    }
+
+    cmdlist: ^d3d12.IGraphicsCommandList
+
+    {
+        if !assert_ok(device->CreateCommandList(0, .DIRECT, command_allocator, pipeline, 
+                                                    d3d12.ICommandList_UUID,
+                                                    (^rawptr)(&cmdlist)), "Failed to create command list") {
+            return
+        }
+
+        if !assert_ok(cmdlist->Close(), "Failed to close command list") {
             return
         }
     }
