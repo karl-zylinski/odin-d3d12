@@ -1,6 +1,8 @@
 package zg
 
 import "core:fmt"
+import "core:mem"
+import "core:sys/windows"
 import SDL "vendor:sdl2"
 import d3d12 "vendor:directx/d3d12"
 import dxgi "vendor:directx/dxgi"
@@ -26,10 +28,10 @@ main :: proc() {
 
 	defer SDL.Quit()
 
-	wx := i32(1280)
-	wy := i32(720)
+	wx := i32(640)
+	wy := i32(480)
 
-	window := SDL.CreateWindow("zg",
+	window := SDL.CreateWindow("d3d12 triangle",
 		SDL.WINDOWPOS_UNDEFINED,
 		SDL.WINDOWPOS_UNDEFINED,
 		wx, wy,
@@ -337,11 +339,211 @@ main :: proc() {
         }
     }
 
+    vertex_buffer: ^d3d12.IResource
+    vertex_buffer_view: d3d12.VERTEX_BUFFER_VIEW
+
+    {
+        aspect := f32(wx) / f32(wy)
+
+        vertices := [?]f32 {
+            // pos                          color
+             0.0 , 0.5 * aspect, 0.0,  1,0,0,0,
+             0.5, -0.5 * aspect, 0.0,  0,1,0,0,
+            -0.5, -0.5 * aspect, 0.0,  0,0,1,0,
+        }
+
+        heap_props := d3d12.HEAP_PROPERTIES {
+            Type = .UPLOAD,
+        }
+
+        vertex_buffer_size := len(vertices) * size_of(vertices[0])
+
+        resource_desc := d3d12.RESOURCE_DESC {
+            Dimension = .BUFFER,
+            Alignment = 0,
+            Width = u64(vertex_buffer_size),
+            Height = 1,
+            DepthOrArraySize = 1,
+            MipLevels = 1,
+            Format = .UNKNOWN,
+            SampleDesc = { Count = 1, Quality = 0 },
+            Layout = .ROW_MAJOR,
+            Flags = .NONE,
+        }
+
+        if !assert_ok(device->CreateCommittedResource(&heap_props, .NONE, &resource_desc,
+            .GENERIC_READ, nil, d3d12.IResource_UUID, (^rawptr)(&vertex_buffer)), "Failed creating vertex buffer") {
+            return
+        }
+
+        gpu_data: rawptr
+        read_range: d3d12.RANGE
+
+        if !assert_ok(vertex_buffer->Map(0, &read_range, &gpu_data), "Failed creating verex buffer resource") {
+            return
+        }
+
+        mem.copy(gpu_data, &vertices[0], vertex_buffer_size)
+        vertex_buffer->Unmap(0, nil)
+
+        vertex_buffer_view = d3d12.VERTEX_BUFFER_VIEW {
+            BufferLocation = vertex_buffer->GetGPUVirtualAddress(),
+            StrideInBytes = u32(vertex_buffer_size/3),
+            SizeInBytes = u32(vertex_buffer_size),
+        }
+    }
+
+    fence_value: u64
+    fence: ^d3d12.IFence
+    fence_event: windows.HANDLE
+
+    {
+        if !assert_ok(device->CreateFence(fence_value, .NONE, d3d12.IFence_UUID, (^rawptr)(&fence)), "Failed to create fence") {
+            return;
+        }
+
+        fence_value += 1
+
+        manual_reset: windows.BOOL = false
+        initial_state: windows.BOOL = false
+        fence_event = windows.CreateEventW(nil, manual_reset, initial_state, nil)
+        if fence_event == nil {
+            //hr = HRESULT_FROM_WIN32(GetLastError());
+            fmt.println("Failed to create fence event")
+            return
+        }
+    }
+
+    {
+        current_fence_value := fence_value
+
+        if !assert_ok(queue->Signal(fence, current_fence_value), "Failed to signal fence") {
+            return;
+        }
+
+        fence_value += 1
+        completed := fence->GetCompletedValue()
+
+        if completed < current_fence_value {
+
+            if !assert_ok(fence->SetEventOnCompletion(current_fence_value, fence_event), "Failed to set event on completion flag") {
+                return;
+            }
+
+            windows.WaitForSingleObject(fence_event, windows.INFINITE);
+        }
+
+        frame_index = swapchain->GetCurrentBackBufferIndex()
+    }
+
 	main_loop: for {
 		for e: SDL.Event; SDL.PollEvent(&e) != 0; {
 			#partial switch e.type {
 				case .QUIT:
 					break main_loop
+                case .WINDOWEVENT:
+                    if e.window.event == .EXPOSED {
+                        if !assert_ok(command_allocator->Reset(), "Failed resetting command allocator") {
+                            return
+                        }
+
+                        if !assert_ok(cmdlist->Reset(command_allocator, pipeline), "Failed to reset command list") {
+                            return
+                        }
+
+                        viewport := d3d12.VIEWPORT {
+                            Width = f32(wx),
+                            Height = f32(wy),
+                        }
+
+                        scissor_rect := d3d12.RECT {
+                            left = 0, right = wx,
+                            top = 0, bottom = wy,
+                        }
+
+                        // This state is reset everytime the cmd list is reset, so we need to rebind it
+                        cmdlist->SetGraphicsRootSignature(root_signature)
+                        cmdlist->RSSetViewports(1, &viewport)
+                        cmdlist->RSSetScissorRects(1, &scissor_rect)
+
+                        to_render_target_barrier := d3d12.RESOURCE_BARRIER {
+                            Type = .TRANSITION,
+                            Flags = .NONE,
+                        }
+
+                        to_render_target_barrier.Transition = {
+                            pResource = targets[frame_index],
+                            StateBefore = .PRESENT,
+                            StateAfter = .RENDER_TARGET,
+                            Subresource = d3d12.RESOURCE_BARRIER_ALL_SUBRESOURCES,
+                        }
+
+                        cmdlist->ResourceBarrier(1, &to_render_target_barrier)
+
+                        rtv_handle: d3d12.CPU_DESCRIPTOR_HANDLE
+                        rtv_descriptor_heap->GetCPUDescriptorHandleForHeapStart(&rtv_handle)
+
+                        if (frame_index > 0) {
+                            s := device->GetDescriptorHandleIncrementSize(.RTV)
+                            rtv_handle.ptr += uint(frame_index * s)
+                        }
+
+                        cmdlist->OMSetRenderTargets(1, &rtv_handle, false, nil)
+
+                        // clear backbuffer
+                        clearcolor := [?]f32 { 0.05, 0.05, 0.05, 1.0 }
+                        cmdlist->ClearRenderTargetView(rtv_handle, &clearcolor, 0, nil)
+
+                        // draw calls!
+                        cmdlist->IASetPrimitiveTopology(.TRIANGLELIST)
+                        cmdlist->IASetVertexBuffers(0, 1, &vertex_buffer_view)
+                        cmdlist->DrawInstanced(3, 1, 0, 0)
+                        
+                        to_present_barrier := to_render_target_barrier
+                        to_present_barrier.Transition.StateBefore = .RENDER_TARGET;
+                        to_present_barrier.Transition.StateAfter = .PRESENT;
+
+                        cmdlist->ResourceBarrier(1, &to_present_barrier);
+
+                        if !assert_ok(cmdlist->Close(), "Failed to close command list") {
+                            return
+                        }
+
+                        // execute
+                        cmdlists := [?]^d3d12.IGraphicsCommandList { cmdlist }
+                        queue->ExecuteCommandLists(len(cmdlists), (^^d3d12.ICommandList)(&cmdlists[0]))
+
+                        // present
+                        {
+                            flags: u32
+                            params: dxgi.PRESENT_PARAMETERS
+                            if !assert_ok(swapchain->Present1(1, flags, &params), "Present failed") {
+                                return
+                            }
+                        }
+
+                        {
+                            current_fence_value := fence_value
+
+                            if !assert_ok(queue->Signal(fence, current_fence_value), "Failed to signal fence") {
+                                return;
+                            }
+
+                            fence_value += 1
+                            completed := fence->GetCompletedValue()
+
+                            if completed < current_fence_value {
+
+                                if !assert_ok(fence->SetEventOnCompletion(current_fence_value, fence_event), "Failed to set event on completion flag") {
+                                    return;
+                                }
+
+                                windows.WaitForSingleObject(fence_event, windows.INFINITE);
+                            }
+
+                            frame_index = swapchain->GetCurrentBackBufferIndex()
+                        }
+                    }
 			}
 		}
 	}
