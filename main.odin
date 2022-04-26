@@ -3,85 +3,70 @@ package zg
 import "core:fmt"
 import "core:mem"
 import "core:sys/windows"
-import SDL "vendor:sdl2"
+import "core:os"
+import sdl "vendor:sdl2"
 import d3d12 "vendor:directx/d3d12"
 import dxgi "vendor:directx/dxgi"
 import d3dc "vendor:directx/d3d_compiler"
 
-BUILD_DEBUG :: true
 NUM_RENDERTARGETS :: 2
 
-assert_ok :: proc(res: d3d12.HRESULT, message: string) -> bool {
+check :: proc(res: d3d12.HRESULT, message: string) {
     if (res >= 0) {
-        return true;
+        return;
     }
 
 	fmt.printf("%v. Error code: %0x\n", message, u32(res))
-    return false;
+    os.exit(-1)
 }
 
 main :: proc() {
-	if err := SDL.Init({.VIDEO}); err != 0 {
+    // Init SDL and create window
+
+	if err := sdl.Init({.VIDEO}); err != 0 {
 		fmt.eprintln(err)
 		return
 	}
 
-	defer SDL.Quit()
-
+	defer sdl.Quit()
 	wx := i32(640)
 	wy := i32(480)
-
-	window := SDL.CreateWindow("d3d12 triangle",
-		SDL.WINDOWPOS_UNDEFINED,
-		SDL.WINDOWPOS_UNDEFINED,
-		wx, wy,
-		{ .ALLOW_HIGHDPI, .SHOWN, .RESIZABLE })
+	window := sdl.CreateWindow("d3d12 triangle", sdl.WINDOWPOS_UNDEFINED, sdl.WINDOWPOS_UNDEFINED, wx, wy, { .ALLOW_HIGHDPI, .SHOWN, .RESIZABLE })
 
 	if window == nil {
-		fmt.eprintln(SDL.GetError())
+		fmt.eprintln(sdl.GetError())
 		return
 	}
 
-	defer SDL.DestroyWindow(window)
+	defer sdl.DestroyWindow(window)
+    hr: d3d12.HRESULT
 
-	/*debug: ^d3d12.IDebug
-
-	debug_uuid := &d3d12.IID{0xcf59a98c, 0xa950, 0x4326, {0x91, 0xef, 0x9b, 0xba, 0xa1, 0x7b, 0xfd, 0x95}}
-
-	when BUILD_DEBUG {
-		if success(d3d12.GetDebugInterface(debug_uuid, (^rawptr)(&debug))) {
-			debug->EnableDebugLayer()
-		} else {
-			fmt.println("Failed to get debug interface")
-			return
-		}
-	}*/
-
+    // Init DXGI factory. DXGI is the link between the window and DirectX
 	factory: ^dxgi.IFactory4
 
 	{
-		flags :u32= 0
+		flags: u32 = 0
 
-		when BUILD_DEBUG {
+		when ODIN_DEBUG {
 			flags |= dxgi.CREATE_FACTORY_DEBUG
 		}
 
-		if !assert_ok(dxgi.CreateDXGIFactory2(flags, dxgi.IFactory4_UUID, &factory), "Failed creating factory") {
-			return
-		}
+		hr = dxgi.CreateDXGIFactory2(flags, dxgi.IFactory4_UUID, &factory)
+        check(hr, "Failed creating factory")
 	}
 
+    // Find the DXGI adapter (GPU)
 	adapter: ^dxgi.IAdapter1
 	error_not_found := dxgi.HRESULT(-142213123)
 
-    for i :u32= 0; factory->EnumAdapters1(i, &adapter) != error_not_found; i += 1 {
+    for i: u32 = 0; factory->EnumAdapters1(i, &adapter) != error_not_found; i += 1 {
         desc: dxgi.ADAPTER_DESC1
         adapter->GetDesc1(&desc)
         if desc.Flags & u32(dxgi.ADAPTER_FLAG.SOFTWARE) != 0 {
             continue
         }
 
-        if d3d12.CreateDevice((^dxgi.IUnknown)(adapter), ._11_0, dxgi.IDevice_UUID, nil) >= 0 {
+        if d3d12.CreateDevice((^dxgi.IUnknown)(adapter), ._12_0, dxgi.IDevice_UUID, nil) >= 0 {
             break
         } else {
             fmt.println("Failed to create device")
@@ -93,29 +78,27 @@ main :: proc() {
     	return
     }
 
+    // Create D3D12 device that represents the GPU
     device: ^d3d12.IDevice
-
-    if !assert_ok(d3d12.CreateDevice((^dxgi.IUnknown)(adapter), ._11_0, d3d12.IDevice_UUID, (^rawptr)(&device)), "Failed to create device") {
-    	return
-    }
-
-    
+    hr = d3d12.CreateDevice((^dxgi.IUnknown)(adapter), ._12_0, d3d12.IDevice_UUID, (^rawptr)(&device))
+    check(hr, "Failed to create device")
     queue: ^d3d12.ICommandQueue
 
     {
     	desc := d3d12.COMMAND_QUEUE_DESC {
     		Type = .DIRECT,
     	}
-        if !assert_ok(device->CreateCommandQueue(&desc, d3d12.ICommandQueue_UUID, (^rawptr)(&queue)), "Failed creating command queue") {
-        	return
-        }
+
+        hr = device->CreateCommandQueue(&desc, d3d12.ICommandQueue_UUID, (^rawptr)(&queue))
+        check(hr, "Failed creating command queue")
     }
 
-    window_info: SDL.SysWMinfo
-    SDL.GetWindowWMInfo(window, &window_info)
-
+    // Get the window handle from SDL
+    window_info: sdl.SysWMinfo
+    sdl.GetWindowWMInfo(window, &window_info)
     window_handle := dxgi.HWND(window_info.info.win.window)
-
+    
+    // Create the swapchain, it's the thing that contains render targets that we draw into. It has 2 render targets (NUM_RENDERTARGETS), giving us double buffering.
     swapchain: ^dxgi.ISwapChain3
     
     {
@@ -134,12 +117,13 @@ main :: proc() {
             AlphaMode = .UNSPECIFIED,
         };
 
-        if !assert_ok(factory->CreateSwapChainForHwnd((^dxgi.IUnknown)(queue), window_handle, &desc, nil, nil, (^^dxgi.ISwapChain1)(&swapchain)), "Failed to create swap chain") {
-            return;
-        }
+        hr = factory->CreateSwapChainForHwnd((^dxgi.IUnknown)(queue), window_handle, &desc, nil, nil, (^^dxgi.ISwapChain1)(&swapchain))
+        check(hr, "Failed to create swap chain")
     }
 
     frame_index := swapchain->GetCurrentBackBufferIndex()
+
+    // Descripors describe the GPU data and are allocated from a Descriptor Heap
     rtv_descriptor_heap: ^d3d12.IDescriptorHeap
 
     {
@@ -149,33 +133,38 @@ main :: proc() {
             Flags = .NONE,
         };
 
-        if !assert_ok(device->CreateDescriptorHeap(&desc, d3d12.IDescriptorHeap_UUID, (^rawptr)(&rtv_descriptor_heap)), "Failed creating descriptor heap") {
-            return
-        }
+        hr = device->CreateDescriptorHeap(&desc, d3d12.IDescriptorHeap_UUID, (^rawptr)(&rtv_descriptor_heap))
+        check(hr, "Failed creating descriptor heap")
     }
 
+    // Fetch the two render targets from the swapchain
     targets: [NUM_RENDERTARGETS]^d3d12.IResource
 
     {
-        rtv_descriptor_size :u32= device->GetDescriptorHandleIncrementSize(.RTV);
+        rtv_descriptor_size: u32 = device->GetDescriptorHandleIncrementSize(.RTV);
         rtv_descriptor_handle: d3d12.CPU_DESCRIPTOR_HANDLE
         rtv_descriptor_heap->GetCPUDescriptorHandleForHeapStart(&rtv_descriptor_handle)
 
         for i :u32= 0; i < NUM_RENDERTARGETS; i += 1 {
-            if !assert_ok(swapchain->GetBuffer(i, d3d12.IResource_UUID, (^rawptr)(&targets[i])), "Failed getting render target") {
-                return;
-            }
+            hr = swapchain->GetBuffer(i, d3d12.IResource_UUID, (^rawptr)(&targets[i]))
+            check(hr, "Failed getting render target")
             device->CreateRenderTargetView(targets[i], nil, rtv_descriptor_handle);
             rtv_descriptor_handle.ptr += uint(rtv_descriptor_size);
         }
     }
 
+    // The command allocator is used to create the commandlist that is used to tell the GPU what to draw
     command_allocator: ^d3d12.ICommandAllocator
+    hr = device->CreateCommandAllocator(.DIRECT, d3d12.ICommandAllocator_UUID, (^rawptr)(&command_allocator))
+    check(hr, "Failed creating command allocator")
 
-    if !assert_ok(device->CreateCommandAllocator(.DIRECT, d3d12.ICommandAllocator_UUID, (^rawptr)(&command_allocator)), "Failed creating command allocator") {
-        return;
-    }
-
+    /* 
+    From https://docs.microsoft.com/en-us/windows/win32/direct3d12/root-signatures-overview:
+    
+        A root signature is configured by the app and links command lists to the resources the shaders require.
+        The graphics command list has both a graphics and compute root signature. A compute command list will
+        simply have one compute root signature. These root signatures are independent of each other.
+    */
     root_signature: ^d3d12.IRootSignature 
 
     {
@@ -184,27 +173,19 @@ main :: proc() {
         };
 
         desc.Desc_1_0.Flags = .ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT
-
         serialized_desc: ^d3d12.IBlob
-
-        if !assert_ok(d3d12.SerializeVersionedRootSignature(&desc, &serialized_desc, nil), "Failed to serialize root signature") {
-            return;
-        }
-
-        if !assert_ok(device->CreateRootSignature(0,
-            serialized_desc->GetBufferPointer(),
-            serialized_desc->GetBufferSize(),
-            d3d12.IRootSignature_UUID,
-            (^rawptr)(&root_signature)), "Failed creating root signature") {
-            return;
-        }
-
+        hr = d3d12.SerializeVersionedRootSignature(&desc, &serialized_desc, nil)
+        check(hr, "Failed to serialize root signature")
+        hr = device->CreateRootSignature(0, serialized_desc->GetBufferPointer(), serialized_desc->GetBufferSize(), d3d12.IRootSignature_UUID, (^rawptr)(&root_signature))
+        check(hr, "Failed creating root signature")
         serialized_desc->Release()
     }
 
+    // The pipeline contains the shaders etc to use
     pipeline: ^d3d12.IPipelineState
 
     {
+        // Compile vertex and pixel shaders
         data :cstring=
             `struct PSInput {
                float4 position : SV_POSITION;
@@ -220,10 +201,10 @@ main :: proc() {
                return input.color;
             };`
 
-        data_size :uint= len(data)
+        data_size: uint = len(data)
 
-        compile_flags :u32= 0
-        when BUILD_DEBUG {
+        compile_flags: u32 = 0
+        when ODIN_DEBUG {
             compile_flags |= u32(d3dc.D3DCOMPILE.DEBUG)
             compile_flags |= u32(d3dc.D3DCOMPILE.SKIP_OPTIMIZATION)
         }
@@ -231,14 +212,13 @@ main :: proc() {
         vs: ^d3d12.IBlob = nil
         ps: ^d3d12.IBlob = nil
 
-        if !assert_ok(d3dc.Compile(rawptr(data), data_size, nil, nil, nil, "VSMain", "vs_4_0", compile_flags, 0, &vs, nil), "Failed to compile vertex shader") {
-            return;
-        }
+        hr = d3dc.Compile(rawptr(data), data_size, nil, nil, nil, "VSMain", "vs_4_0", compile_flags, 0, &vs, nil)
+        check(hr, "Failed to compile vertex shader")
 
-        if !assert_ok(d3dc.Compile(rawptr(data), data_size, nil, nil, nil, "PSMain", "ps_4_0", compile_flags, 0, &ps, nil), "Failed to compile pixel shader") {
-            return;
-        }
+        hr =d3dc.Compile(rawptr(data), data_size, nil, nil, nil, "PSMain", "ps_4_0", compile_flags, 0, &ps, nil)
+        check(hr, "Failed to compile pixel shader")
 
+        // This layout matches the vertices data defined further down
         vertex_format: []d3d12.INPUT_ELEMENT_DESC = {
             { 
                 SemanticName = "POSITION", 
@@ -317,39 +297,30 @@ main :: proc() {
             },
         };
         
-        if !assert_ok(device->CreateGraphicsPipelineState(&pipeline_state_desc, d3d12.IPipelineState_UUID, (^rawptr)(&pipeline)), "Pipeline creation failed") {
-            return
-        }
+        hr = device->CreateGraphicsPipelineState(&pipeline_state_desc, d3d12.IPipelineState_UUID, (^rawptr)(&pipeline))
+        check(hr, "Pipeline creation failed")
 
         vs->Release()
         ps->Release()
     }
 
+    // Create the commandlist that is reused further down.
     cmdlist: ^d3d12.IGraphicsCommandList
-
-    {
-        if !assert_ok(device->CreateCommandList(0, .DIRECT, command_allocator, pipeline, 
-                                                    d3d12.ICommandList_UUID,
-                                                    (^rawptr)(&cmdlist)), "Failed to create command list") {
-            return
-        }
-
-        if !assert_ok(cmdlist->Close(), "Failed to close command list") {
-            return
-        }
-    }
+    hr = device->CreateCommandList(0, .DIRECT, command_allocator, pipeline, d3d12.ICommandList_UUID, (^rawptr)(&cmdlist))
+    check(hr, "Failed to create command list")
+    hr = cmdlist->Close()
+    check(hr, "Failed to close command list")
 
     vertex_buffer: ^d3d12.IResource
     vertex_buffer_view: d3d12.VERTEX_BUFFER_VIEW
 
     {
-        aspect := f32(wx) / f32(wy)
-
+        // The position and color data for the triangle's vertices go together per-vertex
         vertices := [?]f32 {
-            // pos                          color
-             0.0 , 0.5 * aspect, 0.0,  1,0,0,0,
-             0.5, -0.5 * aspect, 0.0,  0,1,0,0,
-            -0.5, -0.5 * aspect, 0.0,  0,0,1,0,
+            // pos            color
+             0.0 , 0.5, 0.0,  1,0,0,0,
+             0.5, -0.5, 0.0,  0,1,0,0,
+            -0.5, -0.5, 0.0,  0,0,1,0,
         }
 
         heap_props := d3d12.HEAP_PROPERTIES {
@@ -371,17 +342,14 @@ main :: proc() {
             Flags = .NONE,
         }
 
-        if !assert_ok(device->CreateCommittedResource(&heap_props, .NONE, &resource_desc,
-            .GENERIC_READ, nil, d3d12.IResource_UUID, (^rawptr)(&vertex_buffer)), "Failed creating vertex buffer") {
-            return
-        }
+        hr = device->CreateCommittedResource(&heap_props, .NONE, &resource_desc, .GENERIC_READ, nil, d3d12.IResource_UUID, (^rawptr)(&vertex_buffer))
+        check(hr, "Failed creating vertex buffer")
 
         gpu_data: rawptr
         read_range: d3d12.RANGE
 
-        if !assert_ok(vertex_buffer->Map(0, &read_range, &gpu_data), "Failed creating verex buffer resource") {
-            return
-        }
+        hr = vertex_buffer->Map(0, &read_range, &gpu_data)
+        check(hr, "Failed creating verex buffer resource")
 
         mem.copy(gpu_data, &vertices[0], vertex_buffer_size)
         vertex_buffer->Unmap(0, nil)
@@ -393,63 +361,37 @@ main :: proc() {
         }
     }
 
+    // This fence is used to wait for frames to finish
     fence_value: u64
     fence: ^d3d12.IFence
     fence_event: windows.HANDLE
 
     {
-        if !assert_ok(device->CreateFence(fence_value, .NONE, d3d12.IFence_UUID, (^rawptr)(&fence)), "Failed to create fence") {
-            return;
-        }
-
+        hr = device->CreateFence(fence_value, .NONE, d3d12.IFence_UUID, (^rawptr)(&fence))
+        check(hr, "Failed to create fence")
         fence_value += 1
-
         manual_reset: windows.BOOL = false
         initial_state: windows.BOOL = false
         fence_event = windows.CreateEventW(nil, manual_reset, initial_state, nil)
         if fence_event == nil {
-            //hr = HRESULT_FROM_WIN32(GetLastError());
             fmt.println("Failed to create fence event")
             return
         }
     }
 
-    {
-        current_fence_value := fence_value
-
-        if !assert_ok(queue->Signal(fence, current_fence_value), "Failed to signal fence") {
-            return;
-        }
-
-        fence_value += 1
-        completed := fence->GetCompletedValue()
-
-        if completed < current_fence_value {
-
-            if !assert_ok(fence->SetEventOnCompletion(current_fence_value, fence_event), "Failed to set event on completion flag") {
-                return;
-            }
-
-            windows.WaitForSingleObject(fence_event, windows.INFINITE);
-        }
-
-        frame_index = swapchain->GetCurrentBackBufferIndex()
-    }
-
 	main_loop: for {
-		for e: SDL.Event; SDL.PollEvent(&e) != 0; {
+		for e: sdl.Event; sdl.PollEvent(&e) != 0; {
 			#partial switch e.type {
 				case .QUIT:
 					break main_loop
                 case .WINDOWEVENT:
+                    // This is equivalent to WM_PAINT in win32 API
                     if e.window.event == .EXPOSED {
-                        if !assert_ok(command_allocator->Reset(), "Failed resetting command allocator") {
-                            return
-                        }
+                        hr = command_allocator->Reset()
+                        check(hr, "Failed resetting command allocator")
 
-                        if !assert_ok(cmdlist->Reset(command_allocator, pipeline), "Failed to reset command list") {
-                            return
-                        }
+                        hr = cmdlist->Reset(command_allocator, pipeline)
+                        check(hr, "Failed to reset command list")
 
                         viewport := d3d12.VIEWPORT {
                             Width = f32(wx),
@@ -494,7 +436,7 @@ main :: proc() {
                         clearcolor := [?]f32 { 0.05, 0.05, 0.05, 1.0 }
                         cmdlist->ClearRenderTargetView(rtv_handle, &clearcolor, 0, nil)
 
-                        // draw calls!
+                        // draw call
                         cmdlist->IASetPrimitiveTopology(.TRIANGLELIST)
                         cmdlist->IASetVertexBuffers(0, 1, &vertex_buffer_view)
                         cmdlist->DrawInstanced(3, 1, 0, 0)
@@ -505,9 +447,8 @@ main :: proc() {
 
                         cmdlist->ResourceBarrier(1, &to_present_barrier);
 
-                        if !assert_ok(cmdlist->Close(), "Failed to close command list") {
-                            return
-                        }
+                        hr = cmdlist->Close()
+                        check(hr, "Failed to close command list")
 
                         // execute
                         cmdlists := [?]^d3d12.IGraphicsCommandList { cmdlist }
@@ -517,27 +458,23 @@ main :: proc() {
                         {
                             flags: u32
                             params: dxgi.PRESENT_PARAMETERS
-                            if !assert_ok(swapchain->Present1(1, flags, &params), "Present failed") {
-                                return
-                            }
+                            hr = swapchain->Present1(1, flags, &params)
+                            check(hr, "Present failed")
                         }
 
+                        // wait for frame to finish
                         {
                             current_fence_value := fence_value
 
-                            if !assert_ok(queue->Signal(fence, current_fence_value), "Failed to signal fence") {
-                                return;
-                            }
+                            hr = queue->Signal(fence, current_fence_value)
+                            check(hr, "Failed to signal fence")
 
                             fence_value += 1
                             completed := fence->GetCompletedValue()
 
                             if completed < current_fence_value {
-
-                                if !assert_ok(fence->SetEventOnCompletion(current_fence_value, fence_event), "Failed to set event on completion flag") {
-                                    return;
-                                }
-
+                                hr = fence->SetEventOnCompletion(current_fence_value, fence_event)
+                                check(hr, "Failed to set event on completion flag")
                                 windows.WaitForSingleObject(fence_event, windows.INFINITE);
                             }
 
