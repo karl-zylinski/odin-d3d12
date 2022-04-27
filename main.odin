@@ -16,48 +16,56 @@ check :: proc(res: d3d12.HRESULT, message: string) {
         return;
     }
 
-	fmt.printf("%v. Error code: %0x\n", message, u32(res))
+    fmt.printf("%v. Error code: %0x\n", message, u32(res))
     os.exit(-1)
 }
 
 main :: proc() {
     // Init SDL and create window
 
-	if err := sdl.Init({.VIDEO}); err != 0 {
-		fmt.eprintln(err)
-		return
-	}
+    if err := sdl.Init({.VIDEO}); err != 0 {
+        fmt.eprintln(err)
+        return
+    }
 
-	defer sdl.Quit()
-	wx := i32(640)
-	wy := i32(480)
-	window := sdl.CreateWindow("d3d12 triangle", sdl.WINDOWPOS_UNDEFINED, sdl.WINDOWPOS_UNDEFINED, wx, wy, { .ALLOW_HIGHDPI, .SHOWN, .RESIZABLE })
+    defer sdl.Quit()
+    wx := i32(640)
+    wy := i32(480)
+    window := sdl.CreateWindow("d3d12 triangle", sdl.WINDOWPOS_UNDEFINED, sdl.WINDOWPOS_UNDEFINED, wx, wy, { .ALLOW_HIGHDPI, .SHOWN, .RESIZABLE })
 
-	if window == nil {
-		fmt.eprintln(sdl.GetError())
-		return
-	}
+    if window == nil {
+        fmt.eprintln(sdl.GetError())
+        return
+    }
 
-	defer sdl.DestroyWindow(window)
+    defer sdl.DestroyWindow(window)
+    debug: ^d3d12.IDebug
     hr: d3d12.HRESULT
 
+    // Init debug layer
+    when ODIN_DEBUG {
+        hr = d3d12.GetDebugInterface(d3d12.IDebug_UUID, (^rawptr)(&debug))
+        check(hr, "Failed creating debug interface")
+        debug->EnableDebugLayer()
+    }
+
     // Init DXGI factory. DXGI is the link between the window and DirectX
-	factory: ^dxgi.IFactory4
+    factory: ^dxgi.IFactory4
 
-	{
-		flags: u32 = 0
+    {
+        flags: u32 = 0
 
-		when ODIN_DEBUG {
-			flags |= dxgi.CREATE_FACTORY_DEBUG
-		}
+        when ODIN_DEBUG {
+            flags |= dxgi.CREATE_FACTORY_DEBUG
+        }
 
-		hr = dxgi.CreateDXGIFactory2(flags, dxgi.IFactory4_UUID, &factory)
+        hr = dxgi.CreateDXGIFactory2(flags, dxgi.IFactory4_UUID, &factory)
         check(hr, "Failed creating factory")
-	}
+    }
 
     // Find the DXGI adapter (GPU)
-	adapter: ^dxgi.IAdapter1
-	error_not_found := dxgi.HRESULT(-142213123)
+    adapter: ^dxgi.IAdapter1
+    error_not_found := dxgi.HRESULT(-142213123)
 
     for i: u32 = 0; factory->EnumAdapters1(i, &adapter) != error_not_found; i += 1 {
         desc: dxgi.ADAPTER_DESC1
@@ -74,20 +82,25 @@ main :: proc() {
     }
 
     if adapter == nil {
-    	fmt.println("Could not find hardware adapter")
-    	return
+        fmt.println("Could not find hardware adapter")
+        return
     }
 
     // Create D3D12 device that represents the GPU
     device: ^d3d12.IDevice
     hr = d3d12.CreateDevice((^dxgi.IUnknown)(adapter), ._12_0, d3d12.IDevice_UUID, (^rawptr)(&device))
     check(hr, "Failed to create device")
+ 
+    info_queue: ^d3d12.IInfoQueue
+    hr = device->QueryInterface(d3d12.IInfoQueue_UUID, (^rawptr)(&info_queue))
+    check(hr, "Failed getting info queue")
+
     queue: ^d3d12.ICommandQueue
 
     {
-    	desc := d3d12.COMMAND_QUEUE_DESC {
-    		Type = .DIRECT,
-    	}
+        desc := d3d12.COMMAND_QUEUE_DESC {
+            Type = .DIRECT,
+        }
 
         hr = device->CreateCommandQueue(&desc, d3d12.ICommandQueue_UUID, (^rawptr)(&queue))
         check(hr, "Failed creating command queue")
@@ -102,7 +115,7 @@ main :: proc() {
     swapchain: ^dxgi.ISwapChain3
     
     {
-    	desc := dxgi.SWAP_CHAIN_DESC1 {
+        desc := dxgi.SWAP_CHAIN_DESC1 {
             Width = u32(wx),
             Height = u32(wy),
             Format = .R8G8B8A8_UNORM,
@@ -141,7 +154,8 @@ main :: proc() {
     targets: [NUM_RENDERTARGETS]^d3d12.IResource
 
     {
-        rtv_descriptor_size: u32 = device->GetDescriptorHandleIncrementSize(.RTV);
+        rtv_descriptor_size: u32 = device->GetDescriptorHandleIncrementSize(.RTV)
+
         rtv_descriptor_handle: d3d12.CPU_DESCRIPTOR_HANDLE
         rtv_descriptor_heap->GetCPUDescriptorHandleForHeapStart(&rtv_descriptor_handle)
 
@@ -152,6 +166,57 @@ main :: proc() {
             rtv_descriptor_handle.ptr += uint(rtv_descriptor_size);
         }
     }
+
+    cbv_descriptor_heap: ^d3d12.IDescriptorHeap
+
+    {
+        desc := d3d12.DESCRIPTOR_HEAP_DESC {
+            NumDescriptors = 10,
+            Type = .CBV_SRV_UAV,
+            Flags = .SHADER_VISIBLE,
+        };
+
+        hr = device->CreateDescriptorHeap(&desc, d3d12.IDescriptorHeap_UUID, (^rawptr)(&cbv_descriptor_heap))
+        check(hr, "Failed creating cbv descriptor heap")
+    }
+
+    mat: ^d3d12.IResource
+
+    {
+        heap_props := d3d12.HEAP_PROPERTIES {
+            Type = .UPLOAD,
+        }
+
+        resource_desc := d3d12.RESOURCE_DESC {
+            Dimension = .BUFFER,
+            Width = 256,
+            Height = 1,
+            DepthOrArraySize = 1,
+            MipLevels = 1,
+            SampleDesc = { Count = 1, Quality = 0, },
+            Layout = .ROW_MAJOR,
+        }
+
+        hr = device->CreateCommittedResource(&heap_props, .NONE, &resource_desc, .GENERIC_READ, nil, d3d12.IResource_UUID, (^rawptr)(&mat))
+        check(hr, "Failed creating commited resource")
+
+        mat_handle: d3d12.CPU_DESCRIPTOR_HANDLE
+        cbv_descriptor_heap->GetCPUDescriptorHandleForHeapStart(&mat_handle)
+        cbv_step := device->GetDescriptorHandleIncrementSize(.CBV_SRV_UAV)
+        mat_handle.ptr += uint(cbv_step)
+
+        cbv_desc := d3d12.CONSTANT_BUFFER_VIEW_DESC {
+            SizeInBytes = 256,
+            BufferLocation = mat->GetGPUVirtualAddress(),
+        }
+
+        device->CreateConstantBufferView(&cbv_desc, mat_handle)
+        mat_data: rawptr
+        mat->Map(0, nil, &mat_data)
+        c: []f32 = { 1, 0, 0, 1 }
+        mem.copy(mat_data, rawptr(&c[0]), 16)
+    }
+    
 
     // The command allocator is used to create the commandlist that is used to tell the GPU what to draw
     command_allocator: ^d3d12.ICommandAllocator
@@ -168,13 +233,24 @@ main :: proc() {
     root_signature: ^d3d12.IRootSignature 
 
     {
-        desc := d3d12.VERSIONED_ROOT_SIGNATURE_DESC {
+        vdesc := d3d12.VERSIONED_ROOT_SIGNATURE_DESC {
             Version = ._1_0,
         };
 
-        desc.Desc_1_0.Flags = .ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT
+        vdesc.Desc_1_0 = {
+            NumParameters = 1,
+            pParameters = &d3d12.ROOT_PARAMETER {
+                ParameterType = .CBV,
+            },
+            Flags = .ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT,
+        }
+
+        // read https://www.braynzarsoft.net/viewtutorial/q16390-directx-12-constant-buffers-root-descriptor-tables properly
+
+        READ
+
         serialized_desc: ^d3d12.IBlob
-        hr = d3d12.SerializeVersionedRootSignature(&desc, &serialized_desc, nil)
+        hr = d3d12.SerializeVersionedRootSignature(&vdesc, &serialized_desc, nil)
         check(hr, "Failed to serialize root signature")
         hr = device->CreateRootSignature(0, serialized_desc->GetBufferPointer(), serialized_desc->GetBufferSize(), d3d12.IRootSignature_UUID, (^rawptr)(&root_signature))
         check(hr, "Failed creating root signature")
@@ -187,14 +263,17 @@ main :: proc() {
     {
         // Compile vertex and pixel shaders
         data :cstring=
-            `struct PSInput {
+            `cbuffer matrices : register(b0) {
+                float4 acolor;
+            };
+            struct PSInput {
                float4 position : SV_POSITION;
                float4 color : COLOR;
             };
             PSInput VSMain(float4 position : POSITION0, float4 color : COLOR0) {
                PSInput result;
                result.position = position;
-               result.color = color;
+               result.color = acolor;
                return result;
             }
             float4 PSMain(PSInput input) : SV_TARGET {
@@ -379,11 +458,11 @@ main :: proc() {
         }
     }
 
-	main_loop: for {
-		for e: sdl.Event; sdl.PollEvent(&e) != 0; {
-			#partial switch e.type {
-				case .QUIT:
-					break main_loop
+    main_loop: for {
+        for e: sdl.Event; sdl.PollEvent(&e) != 0; {
+            #partial switch e.type {
+                case .QUIT:
+                    break main_loop
                 case .WINDOWEVENT:
                     // This is equivalent to WM_PAINT in win32 API
                     if e.window.event == .EXPOSED {
@@ -481,7 +560,7 @@ main :: proc() {
                             frame_index = swapchain->GetCurrentBackBufferIndex()
                         }
                     }
-			}
-		}
-	}
+            }
+        }
+    }
 }
