@@ -93,7 +93,7 @@ main :: proc() {
  
     info_queue: ^d3d12.IInfoQueue
     hr = device->QueryInterface(d3d12.IInfoQueue_UUID, (^rawptr)(&info_queue))
-    check(hr, "Failed getting info queue")
+    //check(hr, "Failed getting info queue")
 
     queue: ^d3d12.ICommandQueue
 
@@ -233,21 +233,45 @@ main :: proc() {
     root_signature: ^d3d12.IRootSignature 
 
     {
+        // create a descriptor range (descriptor table) and fill it out
+// this is a range of descriptors inside a descriptor heap
+        descriptor_table_ranges: []d3d12.DESCRIPTOR_RANGE = {
+            {
+                RangeType = .CBV,
+                NumDescriptors = 1,
+                BaseShaderRegister = 0,
+                RegisterSpace = 0,
+                OffsetInDescriptorsFromTableStart = d3d12.DESCRIPTOR_RANGE_OFFSET_APPEND,
+            },
+        }
+
+        descriptor_table: d3d12.ROOT_DESCRIPTOR_TABLE = {
+            NumDescriptorRanges = u32(len(descriptor_table_ranges)),
+            pDescriptorRanges = &descriptor_table_ranges[0],
+        }
+
         vdesc := d3d12.VERSIONED_ROOT_SIGNATURE_DESC {
             Version = ._1_0,
         };
 
+        root_parameters: []d3d12.ROOT_PARAMETER = {
+            {
+                ParameterType = .DESCRIPTOR_TABLE,
+                ShaderVisibility = .ALL,
+            },
+        }
+
+        root_parameters[0].DescriptorTable = descriptor_table
+
         vdesc.Desc_1_0 = {
             NumParameters = 1,
-            pParameters = &d3d12.ROOT_PARAMETER {
-                ParameterType = .CBV,
-            },
+            pParameters = &root_parameters[0],
             Flags = .ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT,
         }
 
         // read https://www.braynzarsoft.net/viewtutorial/q16390-directx-12-constant-buffers-root-descriptor-tables properly
 
-        READ
+        //READ
 
         serialized_desc: ^d3d12.IBlob
         hr = d3d12.SerializeVersionedRootSignature(&vdesc, &serialized_desc, nil)
@@ -483,6 +507,10 @@ main :: proc() {
                         }
 
                         // This state is reset everytime the cmd list is reset, so we need to rebind it
+                        cmdlist->SetDescriptorHeaps(1, &cbv_descriptor_heap);
+                        table_handle: d3d12.GPU_DESCRIPTOR_HANDLE
+                        cbv_descriptor_heap->GetGPUDescriptorHandleForHeapStart(&table_handle)
+                        cmdlist->SetGraphicsRootDescriptorTable(0, table_handle);
                         cmdlist->SetGraphicsRootSignature(root_signature)
                         cmdlist->RSSetViewports(1, &viewport)
                         cmdlist->RSSetScissorRects(1, &scissor_rect)
