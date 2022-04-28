@@ -4,6 +4,8 @@ import "core:fmt"
 import "core:mem"
 import "core:sys/windows"
 import "core:os"
+import "core:math/linalg/hlsl"
+import "core:math/linalg"
 import sdl "vendor:sdl2"
 import d3d12 "vendor:directx/d3d12"
 import dxgi "vendor:directx/dxgi"
@@ -202,19 +204,19 @@ main :: proc() {
 
         mat_handle: d3d12.CPU_DESCRIPTOR_HANDLE
         cbv_descriptor_heap->GetCPUDescriptorHandleForHeapStart(&mat_handle)
-        cbv_step := device->GetDescriptorHandleIncrementSize(.CBV_SRV_UAV)
-        mat_handle.ptr += uint(cbv_step)
+
+        mat_data: rawptr
+        r: d3d12.RANGE = {}
+        mat->Map(0, &r, &mat_data)
+        c := linalg.identity(hlsl.float4x4)
+        mem.copy(mat_data, rawptr(&c[0]), 128)
+        mat->Unmap(0, nil)
 
         cbv_desc := d3d12.CONSTANT_BUFFER_VIEW_DESC {
             SizeInBytes = 256,
             BufferLocation = mat->GetGPUVirtualAddress(),
         }
-
         device->CreateConstantBufferView(&cbv_desc, mat_handle)
-        mat_data: rawptr
-        mat->Map(0, nil, &mat_data)
-        c: []f32 = { 1, 0, 0, 1 }
-        mem.copy(mat_data, rawptr(&c[0]), 16)
     }
     
 
@@ -288,7 +290,7 @@ main :: proc() {
         // Compile vertex and pixel shaders
         data :cstring=
             `cbuffer matrices : register(b0) {
-                float4 acolor;
+                float4x4 mvp;
             };
             struct PSInput {
                float4 position : SV_POSITION;
@@ -296,8 +298,8 @@ main :: proc() {
             };
             PSInput VSMain(float4 position : POSITION0, float4 color : COLOR0) {
                PSInput result;
-               result.position = position;
-               result.color = acolor;
+               result.position = mul(mvp, position);
+               result.color = color;
                return result;
             }
             float4 PSMain(PSInput input) : SV_TARGET {
@@ -507,11 +509,11 @@ main :: proc() {
                         }
 
                         // This state is reset everytime the cmd list is reset, so we need to rebind it
+                        cmdlist->SetGraphicsRootSignature(root_signature)
                         cmdlist->SetDescriptorHeaps(1, &cbv_descriptor_heap);
                         table_handle: d3d12.GPU_DESCRIPTOR_HANDLE
                         cbv_descriptor_heap->GetGPUDescriptorHandleForHeapStart(&table_handle)
                         cmdlist->SetGraphicsRootDescriptorTable(0, table_handle);
-                        cmdlist->SetGraphicsRootSignature(root_signature)
                         cmdlist->RSSetViewports(1, &viewport)
                         cmdlist->RSSetScissorRects(1, &scissor_rect)
 
