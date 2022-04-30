@@ -38,6 +38,7 @@ main :: proc() {
     ri_state: rc.State
     fence: render_types.Handle
     vertex_buffer: render_types.Handle
+    pipeline: render_types.Handle
 
     vertices := [?]f32 {
         // pos            color
@@ -50,6 +51,7 @@ main :: proc() {
 
     {
         cmdlist: rc.CommandList
+        pipeline = rc.create_pipeline(&ri_state, &cmdlist, f32(wx), f32(wy), render_types.WindowHandle(uintptr(window_handle)))
         vertex_buffer = rc.create_buffer(&ri_state, &cmdlist, rc.VertexBufferDesc { stride = 28 }, rawptr(&vertices[0]), vertex_buffer_size)
         defer delete(cmdlist)
         fence = rc.create_fence(&ri_state, &cmdlist)
@@ -84,7 +86,9 @@ main :: proc() {
         render_d3d12.new_frame(&renderer_state)
         cmdlist: rc.CommandList
         defer delete(cmdlist)
-        append(&cmdlist, rc.SetPipeline {})
+        append(&cmdlist, rc.SetPipeline {
+            handle = pipeline,
+        })
         append(&cmdlist, rc.SetScissor {
             rect = { w = f32(wx), h = f32(wy), },
         })
@@ -105,8 +109,8 @@ main :: proc() {
             after = .Present,    
         })
         append(&cmdlist, rc.Execute{})
-        append(&cmdlist, rc.Present{})
-        append(&cmdlist, rc.WaitForFence(fence))
+        append(&cmdlist, rc.Present{ handle = pipeline })
+        append(&cmdlist, rc.WaitForFence { fence = fence, pipeline = pipeline, })
         render_d3d12.draw(&renderer_state, cmdlist)
     }
 }
