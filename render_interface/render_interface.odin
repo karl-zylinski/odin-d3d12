@@ -10,15 +10,23 @@ Command_Execute :: struct {}
 Command_Create_Fence :: distinct Handle
 Command_Wait_For_Fence :: distinct Handle
 
-Buffer_Type :: enum {
-    Blob,
+Buffer_Desc_Vertex_Buffer :: struct {
+    stride: u32,
+}
+
+Buffer_Desc :: union {
+    Buffer_Desc_Vertex_Buffer,
 }
 
 Command_Create_Buffer :: struct {
     handle: Handle,
     data: rawptr,
     size: int,
-    type: Buffer_Type,
+    desc: Buffer_Desc,
+}
+
+Command_Draw_Call :: struct {
+    vertex_buffer: Handle,
 }
 
 Resource_State :: enum {
@@ -39,6 +47,7 @@ Command :: union {
     Command_Execute,
     Command_Resource_Transition,
     Command_Create_Buffer,
+    Command_Draw_Call,
 }
 
 Command_List :: distinct [dynamic]Command
@@ -55,17 +64,17 @@ create_fence :: proc(s: ^State, command_list: ^Command_List) -> Handle {
     return h
 }
 
-create_buffer :: proc(s: ^State, command_list: ^Command_List, type: Buffer_Type, data: rawptr, size: int) -> Handle {
+create_buffer :: proc(s: ^State, command_list: ^Command_List, desc: Buffer_Desc, data: rawptr, size: int) -> Handle {
     h := get_handle(s)
 
     c := Command_Create_Buffer {
         handle = h,
-        type = .Blob,
+        desc = desc,
+        data = mem.alloc(size),
+        size = size,
     }
 
-    c.data = mem.alloc(size)
     mem.copy(c.data, data, size)
-    c.size = size
     append(command_list, c)
     return h
 }

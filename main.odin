@@ -49,7 +49,7 @@ main :: proc() {
 
     {
         cmdlist: ri.Command_List
-        vertex_buffer = ri.create_buffer(&ri_state, &cmdlist, .Blob, rawptr(&vertices[0]), vertex_buffer_size)
+        vertex_buffer = ri.create_buffer(&ri_state, &cmdlist, ri.Buffer_Desc_Vertex_Buffer { stride = 28 }, rawptr(&vertices[0]), vertex_buffer_size)
         defer delete(cmdlist)
         fence = ri.create_fence(&ri_state, &cmdlist)
         renderer_d3d12.submit_command_list(&renderer_state, cmdlist)
@@ -83,6 +83,9 @@ main :: proc() {
         renderer_d3d12.new_frame(&renderer_state)
         cmdlist: ri.Command_List
         defer delete(cmdlist)
+        append(&cmdlist, ri.Command_Draw_Call {
+            vertex_buffer = vertex_buffer,
+        })
         append(&cmdlist, ri.Command_Resource_Transition {
             before = .Render_Target,
             after = .Present,    

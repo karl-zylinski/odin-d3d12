@@ -13,17 +13,25 @@ import ri "../render_interface"
 
 NUM_RENDERTARGETS :: 2
 
+Vertex_Buffer :: struct {
+    buffer: ^d3d12.IResource,
+    view: d3d12.VERTEX_BUFFER_VIEW,
+}
+
 Fence :: struct {
     value: u64,
     fence: ^d3d12.IFence,
     event: dxgi.HANDLE,
 }
 
+ResourceData :: union {
+    Fence,
+    Vertex_Buffer,
+}
+
 Resource :: struct {
     handle: ri.Handle,
-    resource: union {
-        Fence,
-    },
+    resource: ResourceData,
 }
 
 State :: struct {
@@ -45,8 +53,6 @@ State :: struct {
     root_signature: ^d3d12.IRootSignature,
     pipeline: ^d3d12.IPipelineState,
     cmdlist: ^d3d12.IGraphicsCommandList,
-    vertex_buffer: ^d3d12.IResource,
-    vertex_buffer_view: d3d12.VERTEX_BUFFER_VIEW,
     wx: i32,
     wy: i32,
 
@@ -411,6 +417,16 @@ create :: proc(wx: i32, wy: i32, window_handle: dxgi.HWND) -> (s: State) {
     return s
 }
 
+set_resource :: proc(s: ^State, handle: ri.Handle, res: ResourceData) {
+    index := int(handle)
+
+    if len(s.resources) < index + 1 {
+        resize(&s.resources, index + 1)
+    }
+
+    s.resources[index] = { handle = handle, resource = res }
+}
+
 submit_command_list :: proc(s: ^State, commands: ri.Command_List) {
     hr: d3d12.HRESULT
     for command in commands {
@@ -427,13 +443,7 @@ submit_command_list :: proc(s: ^State, commands: ri.Command_List) {
                     fmt.println("Failed to create fence event")
                 }
 
-                index := int(c)
-
-                if len(s.resources) < index {
-                    resize(&s.resources, index + 1)
-                }
-
-                s.resources[index] = { handle = ri.Handle(c), resource = f }
+                set_resource(s, ri.Handle(c), f)
             }
             case ri.Command_Create_Buffer: {
                 // The position and color data for the triangle's vertices go together per-vertex
@@ -454,23 +464,34 @@ submit_command_list :: proc(s: ^State, commands: ri.Command_List) {
                     Flags = .NONE,
                 }
 
-                hr = s.device->CreateCommittedResource(&heap_props, .NONE, &resource_desc, .GENERIC_READ, nil, d3d12.IResource_UUID, (^rawptr)(&s.vertex_buffer))
+                b: ^d3d12.IResource
+                hr = s.device->CreateCommittedResource(&heap_props, .NONE, &resource_desc, .GENERIC_READ, nil, d3d12.IResource_UUID, (^rawptr)(&b))
                 check(hr, "Failed creating vertex buffer")
 
                 gpu_data: rawptr
                 read_range: d3d12.RANGE
 
-                hr = s.vertex_buffer->Map(0, &read_range, &gpu_data)
+                hr = b->Map(0, &read_range, &gpu_data)
                 check(hr, "Failed creating verex buffer resource")
-
                 mem.copy(gpu_data, c.data, c.size)
-                s.vertex_buffer->Unmap(0, nil)
+                b->Unmap(0, nil)
 
-                s.vertex_buffer_view = d3d12.VERTEX_BUFFER_VIEW {
-                    BufferLocation = s.vertex_buffer->GetGPUVirtualAddress(),
-                    StrideInBytes = u32(c.size/3),
-                    SizeInBytes = u32(c.size),
+                rd: ResourceData
+
+                switch d in c.desc {
+                    case ri.Buffer_Desc_Vertex_Buffer: {
+                        rd = Vertex_Buffer {
+                            buffer = b,
+                            view = d3d12.VERTEX_BUFFER_VIEW {
+                                BufferLocation = b->GetGPUVirtualAddress(),
+                                StrideInBytes = u32(d.stride),
+                                SizeInBytes = u32(c.size),
+                            },
+                        }
+                    }
                 }
+
+                set_resource(s, c.handle, rd)
 
                 free(c.data)
             }
@@ -545,16 +566,19 @@ draw :: proc(s: ^State, commands: ri.Command_List) {
     // clear backbuffer
     clearcolor := [?]f32 { 0.05, 0.05, 0.05, 1.0 }
     s.cmdlist->ClearRenderTargetView(rtv_handle, &clearcolor, 0, nil)
-
-    // draw call
-    s.cmdlist->IASetPrimitiveTopology(.TRIANGLELIST)
-    s.cmdlist->IASetVertexBuffers(0, 1, &s.vertex_buffer_view)
-    s.cmdlist->DrawInstanced(3, 1, 0, 0)
     
     // execute
     for command in commands {
         #partial switch c in command {
-            case ri.Command_Resource_Transition: {
+            case ri.Command_Draw_Call:
+                if vb, ok := &s.resources[c.vertex_buffer].resource.(Vertex_Buffer); ok {
+                    num_instances := vb.view.SizeInBytes / vb.view.StrideInBytes
+                    s.cmdlist->IASetPrimitiveTopology(.TRIANGLELIST)
+                    s.cmdlist->IASetVertexBuffers(0, 1, &vb.view)
+                    s.cmdlist->DrawInstanced(num_instances, 1, 0, 0)
+                }
+
+            case ri.Command_Resource_Transition:
                 b := d3d12.RESOURCE_BARRIER {
                     Type = .TRANSITION,
                     Flags = .NONE,
@@ -568,14 +592,14 @@ draw :: proc(s: ^State, commands: ri.Command_List) {
                 }
 
                 s.cmdlist->ResourceBarrier(1, &b);
-            }
-            case ri.Command_Execute: {
+
+            case ri.Command_Execute:
                 hr = s.cmdlist->Close()
                 check(hr, "Failed to close command list")
                 cmdlists := [?]^d3d12.IGraphicsCommandList { s.cmdlist }
                 s.queue->ExecuteCommandLists(len(cmdlists), (^^d3d12.ICommandList)(&cmdlists[0]))
-            }
-            case ri.Command_Present: {
+            
+            case ri.Command_Present:
                 flags: u32
                 params: dxgi.PRESENT_PARAMETERS
                 hr = s.swapchain->Present1(1, flags, &params)
@@ -595,8 +619,8 @@ draw :: proc(s: ^State, commands: ri.Command_List) {
                 }
 
                 check(hr, "Present failed")
-            }
-            case ri.Command_Wait_For_Fence: {
+            
+            case ri.Command_Wait_For_Fence:
                 if f, ok := &s.resources[c].resource.(Fence); ok {
                     current_fence_value := f.value
 
@@ -614,7 +638,6 @@ draw :: proc(s: ^State, commands: ri.Command_List) {
 
                     s.frame_index = s.swapchain->GetCurrentBackBufferIndex()
                 }
-            }
         }
     }
 }
