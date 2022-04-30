@@ -67,7 +67,7 @@ create :: proc(wx: i32, wy: i32, window_handle: dxgi.HWND) -> (s: State) {
     // Init debug layer
     when ODIN_DEBUG {
         hr = d3d12.GetDebugInterface(d3d12.IDebug_UUID, (^rawptr)(&s.debug))
-        check(hr, "Failed creating debug interface")
+        check(hr, s.info_queue, "Failed creating debug interface")
         s.debug->EnableDebugLayer()
     }
 
@@ -80,7 +80,7 @@ create :: proc(wx: i32, wy: i32, window_handle: dxgi.HWND) -> (s: State) {
         }
 
         hr = dxgi.CreateDXGIFactory2(flags, dxgi.IFactory4_UUID, &s.factory)
-        check(hr, "Failed creating factory")
+        check(hr, s.info_queue, "Failed creating factory")
     }
 
     // Find the DXGI adapter (GPU)
@@ -107,11 +107,11 @@ create :: proc(wx: i32, wy: i32, window_handle: dxgi.HWND) -> (s: State) {
 
     // Create D3D12 device that represents the GPU
     
-    hr = d3d12.CreateDevice((^dxgi.IUnknown)(s.adapter), ._12_0, d3d12.IDevice_UUID, (^rawptr)(&s.device))
-    check(hr, "Failed to create device")
+    hr = d3d12.CreateDevice((^dxgi.IUnknown)(s.adapter), ._12_1, d3d12.IDevice_UUID, (^rawptr)(&s.device))
+    check(hr, s.info_queue, "Failed to create device")
  
     hr = s.device->QueryInterface(d3d12.IInfoQueue_UUID, (^rawptr)(&s.info_queue))
-    check(hr, "Failed getting info queue")
+    check(hr, s.info_queue, "Failed getting info queue")
 
     {
         desc := d3d12.COMMAND_QUEUE_DESC {
@@ -119,7 +119,7 @@ create :: proc(wx: i32, wy: i32, window_handle: dxgi.HWND) -> (s: State) {
         }
 
         hr = s.device->CreateCommandQueue(&desc, d3d12.ICommandQueue_UUID, (^rawptr)(&s.queue))
-        check(hr, "Failed creating command queue")
+        check(hr, s.info_queue, "Failed creating command queue")
     }
 
     // Create the swapchain, it's the thing that contains render targets that we draw into. It has 2 render targets (NUM_RENDERTARGETS), giving us double buffering.
@@ -140,7 +140,7 @@ create :: proc(wx: i32, wy: i32, window_handle: dxgi.HWND) -> (s: State) {
         };
 
         hr = s.factory->CreateSwapChainForHwnd((^dxgi.IUnknown)(s.queue), window_handle, &desc, nil, nil, (^^dxgi.ISwapChain1)(&s.swapchain))
-        check(hr, "Failed to create swap chain")
+        check(hr, s.info_queue, "Failed to create swap chain")
     }
 
     frame_index := s.swapchain->GetCurrentBackBufferIndex()
@@ -154,7 +154,7 @@ create :: proc(wx: i32, wy: i32, window_handle: dxgi.HWND) -> (s: State) {
         };
 
         hr = s.device->CreateDescriptorHeap(&desc, d3d12.IDescriptorHeap_UUID, (^rawptr)(&s.rtv_descriptor_heap))
-        check(hr, "Failed creating descriptor heap")
+        check(hr, s.info_queue, "Failed creating descriptor heap")
     }
 
 
@@ -167,7 +167,7 @@ create :: proc(wx: i32, wy: i32, window_handle: dxgi.HWND) -> (s: State) {
 
         for i :u32= 0; i < NUM_RENDERTARGETS; i += 1 {
             hr = s.swapchain->GetBuffer(i, d3d12.IResource_UUID, (^rawptr)(&s.targets[i]))
-            check(hr, "Failed getting render target")
+            check(hr, s.info_queue, "Failed getting render target")
             s.device->CreateRenderTargetView(s.targets[i], nil, rtv_descriptor_handle);
             rtv_descriptor_handle.ptr += uint(rtv_descriptor_size);
         }
@@ -182,7 +182,7 @@ create :: proc(wx: i32, wy: i32, window_handle: dxgi.HWND) -> (s: State) {
 
         for i :u32= 0; i < NUM_RENDERTARGETS; i += 1 {
             hr = s.device->CreateDescriptorHeap(&desc, d3d12.IDescriptorHeap_UUID, (^rawptr)(&s.cbv_descriptor_heaps[i]))
-            check(hr, "Failed creating cbv descriptor heap")
+            check(hr, s.info_queue, "Failed creating cbv descriptor heap")
         }
     }
 
@@ -205,7 +205,7 @@ create :: proc(wx: i32, wy: i32, window_handle: dxgi.HWND) -> (s: State) {
 
         for i := 0; i < NUM_RENDERTARGETS; i += 1 {
             hr = s.device->CreateCommittedResource(&heap_props, .NONE, &resource_desc, .GENERIC_READ, nil, d3d12.IResource_UUID, (^rawptr)(&s.mat[i]))
-            check(hr, "Failed creating commited resource")
+            check(hr, s.info_queue, "Failed creating commited resource")
 
             r: d3d12.RANGE = {}
             s.mat[i]->Map(0, &r, (^rawptr)(&s.mat_ptr[i]))
@@ -224,7 +224,7 @@ create :: proc(wx: i32, wy: i32, window_handle: dxgi.HWND) -> (s: State) {
 
     // The command allocator is used to create the commandlist that is used to tell the GPU what to draw
     hr = s.device->CreateCommandAllocator(.DIRECT, d3d12.ICommandAllocator_UUID, (^rawptr)(&s.command_allocator))
-    check(hr, "Failed creating command allocator")
+    check(hr, s.info_queue, "Failed creating command allocator")
 
     /* 
     From https://docs.microsoft.com/en-us/windows/win32/direct3d12/root-signatures-overview:
@@ -279,9 +279,9 @@ create :: proc(wx: i32, wy: i32, window_handle: dxgi.HWND) -> (s: State) {
 
         serialized_desc: ^d3d12.IBlob
         hr = d3d12.SerializeVersionedRootSignature(&vdesc, &serialized_desc, nil)
-        check(hr, "Failed to serialize root signature")
+        check(hr, s.info_queue, "Failed to serialize root signature")
         hr = s.device->CreateRootSignature(0, serialized_desc->GetBufferPointer(), serialized_desc->GetBufferSize(), d3d12.IRootSignature_UUID, (^rawptr)(&s.root_signature))
-        check(hr, "Failed creating root signature")
+        check(hr, s.info_queue, "Failed creating root signature")
         serialized_desc->Release()
     }
 
@@ -318,10 +318,10 @@ create :: proc(wx: i32, wy: i32, window_handle: dxgi.HWND) -> (s: State) {
         ps: ^d3d12.IBlob = nil
 
         hr = d3d_compiler.Compile(rawptr(data), data_size, nil, nil, nil, "VSMain", "vs_4_0", compile_flags, 0, &vs, nil)
-        check(hr, "Failed to compile vertex shader")
+        check(hr, s.info_queue, "Failed to compile vertex shader")
 
         hr = d3d_compiler.Compile(rawptr(data), data_size, nil, nil, nil, "PSMain", "ps_4_0", compile_flags, 0, &ps, nil)
-        check(hr, "Failed to compile pixel shader")
+        check(hr, s.info_queue, "Failed to compile pixel shader")
 
         // This layout matches the vertices data defined further down
         vertex_format: []d3d12.INPUT_ELEMENT_DESC = {
@@ -403,7 +403,7 @@ create :: proc(wx: i32, wy: i32, window_handle: dxgi.HWND) -> (s: State) {
         };
         
         hr = s.device->CreateGraphicsPipelineState(&pipeline_state_desc, d3d12.IPipelineState_UUID, (^rawptr)(&s.pipeline))
-        check(hr, "Pipeline creation failed")
+        check(hr, s.info_queue, "Pipeline creation failed")
 
         vs->Release()
         ps->Release()
@@ -411,9 +411,9 @@ create :: proc(wx: i32, wy: i32, window_handle: dxgi.HWND) -> (s: State) {
 
     // Create the commandlist that is reused further down.
     hr = s.device->CreateCommandList(0, .DIRECT, s.command_allocator, s.pipeline, d3d12.ICommandList_UUID, (^rawptr)(&s.cmdlist))
-    check(hr, "Failed to create command list")
+    check(hr, s.info_queue, "Failed to create command list")
     hr = s.cmdlist->Close()
-    check(hr, "Failed to close command list")
+    check(hr, s.info_queue, "Failed to close command list")
 
     return s
 }
@@ -435,7 +435,7 @@ submit_command_list :: proc(s: ^State, commands: rc.CommandList) {
             case rc.CreateFence: {
                 f: Fence
                 hr = s.device->CreateFence(f.value, .NONE, d3d12.IFence_UUID, (^rawptr)(&f.fence))
-                check(hr, "Failed to create fence")
+                check(hr, s.info_queue, "Failed to create fence")
                 f.value += 1
                 manual_reset: dxgi.BOOL = false
                 initial_state: dxgi.BOOL = false
@@ -467,13 +467,13 @@ submit_command_list :: proc(s: ^State, commands: rc.CommandList) {
 
                 b: ^d3d12.IResource
                 hr = s.device->CreateCommittedResource(&heap_props, .NONE, &resource_desc, .GENERIC_READ, nil, d3d12.IResource_UUID, (^rawptr)(&b))
-                check(hr, "Failed creating vertex buffer")
+                check(hr, s.info_queue, "Failed creating vertex buffer")
 
                 gpu_data: rawptr
                 read_range: d3d12.RANGE
 
                 hr = b->Map(0, &read_range, &gpu_data)
-                check(hr, "Failed creating verex buffer resource")
+                check(hr, s.info_queue, "Failed creating verex buffer resource")
                 mem.copy(gpu_data, c.data, c.size)
                 b->Unmap(0, nil)
 
@@ -503,10 +503,10 @@ submit_command_list :: proc(s: ^State, commands: rc.CommandList) {
 new_frame :: proc(s: ^State) {
     hr: d3d12.HRESULT
     hr = s.command_allocator->Reset()
-    check(hr, "Failed resetting command allocator")
+    check(hr, s.info_queue, "Failed resetting command allocator")
 
     hr = s.cmdlist->Reset(s.command_allocator, s.pipeline)
-    check(hr, "Failed to reset command list")
+    check(hr, s.info_queue, "Failed to reset command list")
 }
 
 ri_to_d3d_state :: proc(ri_state: rc.ResourceState) -> d3d12.RESOURCE_STATES {
@@ -596,7 +596,7 @@ draw :: proc(s: ^State, commands: rc.CommandList) {
 
             case rc.Execute:
                 hr = s.cmdlist->Close()
-                check(hr, "Failed to close command list")
+                check(hr, s.info_queue, "Failed to close command list")
                 cmdlists := [?]^d3d12.IGraphicsCommandList { s.cmdlist }
                 s.queue->ExecuteCommandLists(len(cmdlists), (^^d3d12.ICommandList)(&cmdlists[0]))
             
@@ -604,36 +604,21 @@ draw :: proc(s: ^State, commands: rc.CommandList) {
                 flags: u32
                 params: dxgi.PRESENT_PARAMETERS
                 hr = s.swapchain->Present1(1, flags, &params)
-
-                n := s.info_queue->GetNumStoredMessages()
-                for i in 0..n {
-                    msglen: d3d12.SIZE_T
-                    s.info_queue->GetMessageA(i, nil, &msglen)
-
-                    if msglen > 0 {
-                        fmt.println(msglen)
-
-                        msg := (^d3d12.MESSAGE)(mem.alloc(int(msglen)))
-                        s.info_queue->GetMessageA(i, msg, &msglen)
-                        fmt.println(msg.pDescription)
-                    }
-                }
-
-                check(hr, "Present failed")
+                check(hr, s.info_queue, "Present failed")
             
             case rc.WaitForFence:
                 if f, ok := &s.resources[c].resource.(Fence); ok {
                     current_fence_value := f.value
 
                     hr = s.queue->Signal(f.fence, current_fence_value)
-                    check(hr, "Failed to signal fence")
+                    check(hr, s.info_queue, "Failed to signal fence")
 
                     f.value += 1
                     completed := f.fence->GetCompletedValue()
 
                     if completed < current_fence_value {
                         hr = f.fence->SetEventOnCompletion(current_fence_value, f.event)
-                        check(hr, "Failed to set event on completion flag")
+                        check(hr, s.info_queue, "Failed to set event on completion flag")
                         windows.WaitForSingleObject(f.event, windows.INFINITE);
                     }
 
@@ -651,9 +636,24 @@ mvp :: proc(s: ^State) -> hlsl.float4x4 {
     return s.mvp
 }
 
-check :: proc(res: d3d12.HRESULT, message: string) {
+check :: proc(res: d3d12.HRESULT, iq: ^d3d12.IInfoQueue, message: string) {
     if (res >= 0) {
         return;
+    }
+
+    n := iq->GetNumStoredMessages()
+    for i in 0..n {
+        msglen: d3d12.SIZE_T
+        iq->GetMessageA(i, nil, &msglen)
+
+        if msglen > 0 {
+            fmt.println(msglen)
+
+            msg := (^d3d12.MESSAGE)(mem.alloc(int(msglen)))
+            iq->GetMessageA(i, msg, &msglen)
+            fmt.println(msg.pDescription)
+            mem.free(msg)
+        }
     }
 
     fmt.printf("%v. Error code: %0x\n", message, u32(res))
