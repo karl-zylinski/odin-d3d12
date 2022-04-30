@@ -27,6 +27,7 @@ Fence :: struct {
 
 Pipeline :: struct {
     swapchain: ^dxgi.ISwapChain3,
+    queue: ^d3d12.ICommandQueue,
 }
 
 ResourceData :: union {
@@ -46,7 +47,6 @@ State :: struct {
     adapter: ^dxgi.IAdapter1,
     device: ^d3d12.IDevice,
     info_queue: ^d3d12.IInfoQueue,
-    queue: ^d3d12.ICommandQueue,
     frame_index: u32,
     rtv_descriptor_heap: ^d3d12.IDescriptorHeap,
     targets: [NUM_RENDERTARGETS]^d3d12.IResource,
@@ -141,7 +141,7 @@ submit_command_list :: proc(s: ^State, commands: rc.CommandList) {
                         Type = .DIRECT,
                     }
 
-                    hr = s.device->CreateCommandQueue(&desc, d3d12.ICommandQueue_UUID, (^rawptr)(&s.queue))
+                    hr = s.device->CreateCommandQueue(&desc, d3d12.ICommandQueue_UUID, (^rawptr)(&p.queue))
                     check(hr, s.info_queue, "Failed creating command queue")
                 }
 
@@ -162,7 +162,7 @@ submit_command_list :: proc(s: ^State, commands: rc.CommandList) {
                         AlphaMode = .UNSPECIFIED,
                     };
 
-                    hr = s.factory->CreateSwapChainForHwnd((^dxgi.IUnknown)(s.queue), d3d12.HWND(uintptr(c.window_handle)), &desc, nil, nil, (^^dxgi.ISwapChain1)(&p.swapchain))
+                    hr = s.factory->CreateSwapChainForHwnd((^dxgi.IUnknown)(p.queue), d3d12.HWND(uintptr(c.window_handle)), &desc, nil, nil, (^^dxgi.ISwapChain1)(&p.swapchain))
                     check(hr, s.info_queue, "Failed to create swap chain")
                 }
 
@@ -605,10 +605,12 @@ draw :: proc(s: ^State, commands: rc.CommandList) {
                 s.cmdlist->ResourceBarrier(1, &b);
 
             case rc.Execute:
-                hr = s.cmdlist->Close()
-                check(hr, s.info_queue, "Failed to close command list")
-                cmdlists := [?]^d3d12.IGraphicsCommandList { s.cmdlist }
-                s.queue->ExecuteCommandLists(len(cmdlists), (^^d3d12.ICommandList)(&cmdlists[0]))
+                if p, ok := &s.resources[c.pipeline].resource.(Pipeline); ok {
+                    hr = s.cmdlist->Close()
+                    check(hr, s.info_queue, "Failed to close command list")
+                    cmdlists := [?]^d3d12.IGraphicsCommandList { s.cmdlist }
+                    p.queue->ExecuteCommandLists(len(cmdlists), (^^d3d12.ICommandList)(&cmdlists[0]))
+                }
             
             case rc.Present:
                 if p, ok := &s.resources[c.handle].resource.(Pipeline); ok {
@@ -616,14 +618,17 @@ draw :: proc(s: ^State, commands: rc.CommandList) {
                     params: dxgi.PRESENT_PARAMETERS
                     hr = p->swapchain->Present1(1, flags, &params)
                     check(hr, s.info_queue, "Present failed")
+                    s.frame_index = p->swapchain->GetCurrentBackBufferIndex()
                 }
 
             case rc.WaitForFence:
                 if f, ok := &s.resources[c.fence].resource.(Fence); ok {
                     current_fence_value := f.value
 
-                    hr = s.queue->Signal(f.fence, current_fence_value)
-                    check(hr, s.info_queue, "Failed to signal fence")
+                    if p, ok := &s.resources[c.pipeline].resource.(Pipeline); ok {
+                        hr = p.queue->Signal(f.fence, current_fence_value)
+                        check(hr, s.info_queue, "Failed to signal fence")
+                    }
 
                     f.value += 1
                     completed := f.fence->GetCompletedValue()
@@ -632,11 +637,6 @@ draw :: proc(s: ^State, commands: rc.CommandList) {
                         hr = f.fence->SetEventOnCompletion(current_fence_value, f.event)
                         check(hr, s.info_queue, "Failed to set event on completion flag")
                         windows.WaitForSingleObject(f.event, windows.INFINITE);
-                    }
-
-
-                    if p, ok := &s.resources[c.pipeline].resource.(Pipeline); ok {
-                        s.frame_index = p->swapchain->GetCurrentBackBufferIndex()
                     }
                 }
         }

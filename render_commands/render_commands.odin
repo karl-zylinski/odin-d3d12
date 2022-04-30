@@ -13,7 +13,10 @@ Present :: struct {
     handle: Handle,
 }
 
-Execute :: struct {}
+Execute :: struct {
+    pipeline: Handle,
+}
+
 CreateFence :: distinct Handle
 WaitForFence :: struct {
     fence: Handle,

@@ -108,7 +108,7 @@ main :: proc() {
             before = .RenderTarget,
             after = .Present,    
         })
-        append(&cmdlist, rc.Execute{})
+        append(&cmdlist, rc.Execute{ pipeline = pipeline, })
         append(&cmdlist, rc.Present{ handle = pipeline })
         append(&cmdlist, rc.WaitForFence { fence = fence, pipeline = pipeline, })
         render_d3d12.draw(&renderer_state, cmdlist)
