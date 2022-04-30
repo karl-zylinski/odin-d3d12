@@ -6,8 +6,9 @@ import "core:sys/windows"
 import "core:os"
 import "vendor:sdl2"
 import "vendor:directx/dxgi"
-import "renderer_d3d12"
-import ri "render_interface"
+import "render_d3d12"
+import rc "render_commands"
+import "render_types"
 
 main :: proc() {
     // Init SDL and create window
@@ -32,11 +33,11 @@ main :: proc() {
     window_info: sdl2.SysWMinfo
     sdl2.GetWindowWMInfo(window, &window_info)
     window_handle := dxgi.HWND(window_info.info.win.window)
-    renderer_state := renderer_d3d12.create(wx, wy, window_handle)
+    renderer_state := render_d3d12.create(wx, wy, window_handle)
     renderer_state.mvp = 1
-    ri_state: ri.State
-    fence: ri.Handle
-    vertex_buffer: ri.Handle
+    ri_state: rc.State
+    fence: render_types.Handle
+    vertex_buffer: render_types.Handle
 
     vertices := [?]f32 {
         // pos            color
@@ -48,11 +49,11 @@ main :: proc() {
     vertex_buffer_size := len(vertices) * size_of(vertices[0])
 
     {
-        cmdlist: ri.Command_List
-        vertex_buffer = ri.create_buffer(&ri_state, &cmdlist, ri.Buffer_Desc_Vertex_Buffer { stride = 28 }, rawptr(&vertices[0]), vertex_buffer_size)
+        cmdlist: rc.CommandList
+        vertex_buffer = rc.create_buffer(&ri_state, &cmdlist, rc.VertexBufferDesc { stride = 28 }, rawptr(&vertices[0]), vertex_buffer_size)
         defer delete(cmdlist)
-        fence = ri.create_fence(&ri_state, &cmdlist)
-        renderer_d3d12.submit_command_list(&renderer_state, cmdlist)
+        fence = rc.create_fence(&ri_state, &cmdlist)
+        render_d3d12.submit_command_list(&renderer_state, cmdlist)
     }
     
     main_loop: for {
@@ -61,7 +62,7 @@ main :: proc() {
                 case .QUIT:
                     break main_loop
                 case .KEYDOWN:
-                    mvp := renderer_d3d12.mvp(&renderer_state)
+                    mvp := render_d3d12.mvp(&renderer_state)
 
                     if e.key.keysym.sym == .UP {
                         mvp[3][1] += 0.1
@@ -76,23 +77,36 @@ main :: proc() {
                         mvp[3][0] += 0.1
                     }
 
-                    renderer_d3d12.set_mvp(&renderer_state, &mvp)
+                    render_d3d12.set_mvp(&renderer_state, &mvp)
             }
         }
 
-        renderer_d3d12.new_frame(&renderer_state)
-        cmdlist: ri.Command_List
+        render_d3d12.new_frame(&renderer_state)
+        cmdlist: rc.CommandList
         defer delete(cmdlist)
-        append(&cmdlist, ri.Command_Draw_Call {
+        append(&cmdlist, rc.SetPipeline {})
+        append(&cmdlist, rc.SetScissor {
+            rect = { w = f32(wx), h = f32(wy), },
+        })
+        append(&cmdlist, rc.SetViewport {
+            rect = { w = f32(wx), h = f32(wy), },
+        })
+        append(&cmdlist, rc.ResourceTransition {
+            before = .Present,
+            after = .RenderTarget,    
+        })
+        append(&cmdlist, rc.SetRenderTarget { })
+        append(&cmdlist, rc.ClearRenderTarget { clear_color = {1, 0, 0, 1} })
+        append(&cmdlist, rc.DrawCall {
             vertex_buffer = vertex_buffer,
         })
-        append(&cmdlist, ri.Command_Resource_Transition {
-            before = .Render_Target,
+        append(&cmdlist, rc.ResourceTransition {
+            before = .RenderTarget,
             after = .Present,    
         })
-        append(&cmdlist, ri.Command_Execute{})
-        append(&cmdlist, ri.Command_Present{})
-        append(&cmdlist, ri.Command_Wait_For_Fence(fence))
-        renderer_d3d12.draw(&renderer_state, cmdlist)
+        append(&cmdlist, rc.Execute{})
+        append(&cmdlist, rc.Present{})
+        append(&cmdlist, rc.WaitForFence(fence))
+        render_d3d12.draw(&renderer_state, cmdlist)
     }
 }

@@ -9,7 +9,8 @@ import "core:math/linalg/hlsl"
 import "core:math/linalg"
 import "core:sys/windows"
 import "core:os"
-import ri "../render_interface"
+import rc "../render_commands"
+import "../render_types"
 
 NUM_RENDERTARGETS :: 2
 
@@ -30,7 +31,7 @@ ResourceData :: union {
 }
 
 Resource :: struct {
-    handle: ri.Handle,
+    handle: render_types.Handle,
     resource: ResourceData,
 }
 
@@ -417,7 +418,7 @@ create :: proc(wx: i32, wy: i32, window_handle: dxgi.HWND) -> (s: State) {
     return s
 }
 
-set_resource :: proc(s: ^State, handle: ri.Handle, res: ResourceData) {
+set_resource :: proc(s: ^State, handle: render_types.Handle, res: ResourceData) {
     index := int(handle)
 
     if len(s.resources) < index + 1 {
@@ -427,11 +428,11 @@ set_resource :: proc(s: ^State, handle: ri.Handle, res: ResourceData) {
     s.resources[index] = { handle = handle, resource = res }
 }
 
-submit_command_list :: proc(s: ^State, commands: ri.Command_List) {
+submit_command_list :: proc(s: ^State, commands: rc.CommandList) {
     hr: d3d12.HRESULT
     for command in commands {
         #partial switch c in command {
-            case ri.Command_Create_Fence: {
+            case rc.CreateFence: {
                 f: Fence
                 hr = s.device->CreateFence(f.value, .NONE, d3d12.IFence_UUID, (^rawptr)(&f.fence))
                 check(hr, "Failed to create fence")
@@ -443,9 +444,9 @@ submit_command_list :: proc(s: ^State, commands: ri.Command_List) {
                     fmt.println("Failed to create fence event")
                 }
 
-                set_resource(s, ri.Handle(c), f)
+                set_resource(s, render_types.Handle(c), f)
             }
-            case ri.Command_Create_Buffer: {
+            case rc.CreateBuffer: {
                 // The position and color data for the triangle's vertices go together per-vertex
                 heap_props := d3d12.HEAP_PROPERTIES {
                     Type = .UPLOAD,
@@ -479,7 +480,7 @@ submit_command_list :: proc(s: ^State, commands: ri.Command_List) {
                 rd: ResourceData
 
                 switch d in c.desc {
-                    case ri.Buffer_Desc_Vertex_Buffer: {
+                    case rc.VertexBufferDesc: {
                         rd = Vertex_Buffer {
                             buffer = b,
                             view = d3d12.VERTEX_BUFFER_VIEW {
@@ -508,69 +509,69 @@ new_frame :: proc(s: ^State) {
     check(hr, "Failed to reset command list")
 }
 
-ri_to_d3d_state :: proc(ri_state: ri.Resource_State) -> d3d12.RESOURCE_STATES {
+ri_to_d3d_state :: proc(ri_state: rc.ResourceState) -> d3d12.RESOURCE_STATES {
     switch ri_state {
         case .Present: return .PRESENT
-        case .Render_Target: return .RENDER_TARGET
+        case .RenderTarget: return .RENDER_TARGET
     }
     return .COMMON
 }
 
-draw :: proc(s: ^State, commands: ri.Command_List) {
+draw :: proc(s: ^State, commands: rc.CommandList) {
     hr: d3d12.HRESULT
     mem.copy(s.mat_ptr[s.frame_index], rawptr(&s.mvp[0]), 128)
-    
-    viewport := d3d12.VIEWPORT {
-        Width = f32(s.wx),
-        Height = f32(s.wy),
-    }
-
-    scissor_rect := d3d12.RECT {
-        left = 0, right = s.wx,
-        top = 0, bottom = s.wy,
-    }
 
     // This state is reset everytime the cmd list is reset, so we need to rebind it
-    s.cmdlist->SetGraphicsRootSignature(s.root_signature)
-    s.cmdlist->SetDescriptorHeaps(1, &s.cbv_descriptor_heaps[s.frame_index]);
-    table_handle: d3d12.GPU_DESCRIPTOR_HANDLE
-    s.cbv_descriptor_heaps[s.frame_index]->GetGPUDescriptorHandleForHeapStart(&table_handle)
-    s.cmdlist->SetGraphicsRootDescriptorTable(0, table_handle);
-    s.cmdlist->RSSetViewports(1, &viewport)
-    s.cmdlist->RSSetScissorRects(1, &scissor_rect)
-
-    to_render_target_barrier := d3d12.RESOURCE_BARRIER {
-        Type = .TRANSITION,
-        Flags = .NONE,
-    }
-
-    to_render_target_barrier.Transition = {
-        pResource = s.targets[s.frame_index],
-        StateBefore = .PRESENT,
-        StateAfter = .RENDER_TARGET,
-        Subresource = d3d12.RESOURCE_BARRIER_ALL_SUBRESOURCES,
-    }
-
-    s.cmdlist->ResourceBarrier(1, &to_render_target_barrier)
-
-    rtv_handle: d3d12.CPU_DESCRIPTOR_HANDLE
-    s.rtv_descriptor_heap->GetCPUDescriptorHandleForHeapStart(&rtv_handle)
-
-    if (s.frame_index > 0) {
-        size := s.device->GetDescriptorHandleIncrementSize(.RTV)
-        rtv_handle.ptr += uint(s.frame_index * size)
-    }
-
-    s.cmdlist->OMSetRenderTargets(1, &rtv_handle, false, nil)
-
-    // clear backbuffer
-    clearcolor := [?]f32 { 0.05, 0.05, 0.05, 1.0 }
-    s.cmdlist->ClearRenderTargetView(rtv_handle, &clearcolor, 0, nil)
     
-    // execute
     for command in commands {
         #partial switch c in command {
-            case ri.Command_Draw_Call:
+            case rc.SetPipeline:
+                s.cmdlist->SetGraphicsRootSignature(s.root_signature)
+                s.cmdlist->SetDescriptorHeaps(1, &s.cbv_descriptor_heaps[s.frame_index]);
+                table_handle: d3d12.GPU_DESCRIPTOR_HANDLE
+                s.cbv_descriptor_heaps[s.frame_index]->GetGPUDescriptorHandleForHeapStart(&table_handle)
+                s.cmdlist->SetGraphicsRootDescriptorTable(0, table_handle);
+
+            case rc.SetScissor:
+                s.cmdlist->RSSetScissorRects(1, &{
+                    left = i32(c.rect.x),
+                    top = i32(c.rect.y),
+                    right = i32(c.rect.x + c.rect.w),
+                    bottom = i32(c.rect.y + c.rect.h),
+                })
+
+            case rc.SetViewport:
+                s.cmdlist->RSSetViewports(1, &{
+                    TopLeftX = c.rect.x,
+                    TopLeftY = c.rect.y,
+                    Width = c.rect.w,
+                    Height = c.rect.h,
+                })
+
+            case rc.SetRenderTarget:
+                rtv_handle: d3d12.CPU_DESCRIPTOR_HANDLE
+                s.rtv_descriptor_heap->GetCPUDescriptorHandleForHeapStart(&rtv_handle)
+
+                if (s.frame_index > 0) {
+                    size := s.device->GetDescriptorHandleIncrementSize(.RTV)
+                    rtv_handle.ptr += uint(s.frame_index * size)
+                }
+
+                s.cmdlist->OMSetRenderTargets(1, &rtv_handle, false, nil)
+
+            case rc.ClearRenderTarget: 
+                rtv_handle: d3d12.CPU_DESCRIPTOR_HANDLE
+                s.rtv_descriptor_heap->GetCPUDescriptorHandleForHeapStart(&rtv_handle)
+
+                if (s.frame_index > 0) {
+                    size := s.device->GetDescriptorHandleIncrementSize(.RTV)
+                    rtv_handle.ptr += uint(s.frame_index * size)
+                }
+
+                cc := c.clear_color
+                s.cmdlist->ClearRenderTargetView(rtv_handle, (^[4]f32)(&cc), 0, nil)
+
+            case rc.DrawCall:
                 if vb, ok := &s.resources[c.vertex_buffer].resource.(Vertex_Buffer); ok {
                     num_instances := vb.view.SizeInBytes / vb.view.StrideInBytes
                     s.cmdlist->IASetPrimitiveTopology(.TRIANGLELIST)
@@ -578,7 +579,7 @@ draw :: proc(s: ^State, commands: ri.Command_List) {
                     s.cmdlist->DrawInstanced(num_instances, 1, 0, 0)
                 }
 
-            case ri.Command_Resource_Transition:
+            case rc.ResourceTransition:
                 b := d3d12.RESOURCE_BARRIER {
                     Type = .TRANSITION,
                     Flags = .NONE,
@@ -593,13 +594,13 @@ draw :: proc(s: ^State, commands: ri.Command_List) {
 
                 s.cmdlist->ResourceBarrier(1, &b);
 
-            case ri.Command_Execute:
+            case rc.Execute:
                 hr = s.cmdlist->Close()
                 check(hr, "Failed to close command list")
                 cmdlists := [?]^d3d12.IGraphicsCommandList { s.cmdlist }
                 s.queue->ExecuteCommandLists(len(cmdlists), (^^d3d12.ICommandList)(&cmdlists[0]))
             
-            case ri.Command_Present:
+            case rc.Present:
                 flags: u32
                 params: dxgi.PRESENT_PARAMETERS
                 hr = s.swapchain->Present1(1, flags, &params)
@@ -620,7 +621,7 @@ draw :: proc(s: ^State, commands: ri.Command_List) {
 
                 check(hr, "Present failed")
             
-            case ri.Command_Wait_For_Fence:
+            case rc.WaitForFence:
                 if f, ok := &s.resources[c].resource.(Fence); ok {
                     current_fence_value := f.value
 
