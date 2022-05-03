@@ -16,6 +16,8 @@ NUM_RENDERTARGETS :: 2
 
 VertexBuffer :: struct {
     buffer: ^d3d12.IResource,
+    staging_buffer: ^d3d12.IResource,
+    staging_buffer_updated: bool,
     view: d3d12.VERTEX_BUFFER_VIEW,
 }
 
@@ -30,7 +32,11 @@ Pipeline :: struct {
     queue: ^d3d12.ICommandQueue,
 }
 
+None :: struct {
+}
+
 ResourceData :: union {
+    None,
     Pipeline,
     Fence,
     VertexBuffer,
@@ -71,6 +77,7 @@ create :: proc(wx: i32, wy: i32, window_handle: dxgi.HWND) -> (s: State) {
     // Init debug layer
     when ODIN_DEBUG {
         hr = d3d12.GetDebugInterface(d3d12.IDebug_UUID, (^rawptr)(&s.debug))
+
         check(hr, s.info_queue, "Failed creating debug interface")
         s.debug->EnableDebugLayer()
     }
@@ -114,8 +121,10 @@ create :: proc(wx: i32, wy: i32, window_handle: dxgi.HWND) -> (s: State) {
     hr = d3d12.CreateDevice((^dxgi.IUnknown)(s.adapter), ._12_1, d3d12.IDevice_UUID, (^rawptr)(&s.device))
     check(hr, s.info_queue, "Failed to create device")
  
-    hr = s.device->QueryInterface(d3d12.IInfoQueue_UUID, (^rawptr)(&s.info_queue))
-    check(hr, s.info_queue, "Failed getting info queue")
+    when ODIN_DEBUG {
+        hr = s.device->QueryInterface(d3d12.IInfoQueue_UUID, (^rawptr)(&s.info_queue))
+        check(hr, s.info_queue, "Failed getting info queue")
+    }
 
     return s
 }
@@ -477,13 +486,17 @@ submit_command_list :: proc(s: ^State, commands: rc.CommandList) {
                 hr = s.device->CreateCommittedResource(&heap_props, .NONE, &resource_desc, .GENERIC_READ, nil, d3d12.IResource_UUID, (^rawptr)(&b))
                 check(hr, s.info_queue, "Failed creating vertex buffer")
 
+                b_staging: ^d3d12.IResource
+                hr = s.device->CreateCommittedResource(&heap_props, .NONE, &resource_desc, .GENERIC_READ, nil, d3d12.IResource_UUID, (^rawptr)(&b_staging))
+                check(hr, s.info_queue, "Failed creating vertex buffer")
+
                 gpu_data: rawptr
                 read_range: d3d12.RANGE
 
-                hr = b->Map(0, &read_range, &gpu_data)
+                hr = b_staging->Map(0, &read_range, &gpu_data)
                 check(hr, s.info_queue, "Failed creating verex buffer resource")
                 mem.copy(gpu_data, c.data, c.size)
-                b->Unmap(0, nil)
+                b_staging->Unmap(0, nil)
 
                 rd: ResourceData
 
@@ -491,6 +504,8 @@ submit_command_list :: proc(s: ^State, commands: rc.CommandList) {
                     case rc.VertexBufferDesc: {
                         rd = VertexBuffer {
                             buffer = b,
+                            staging_buffer = b_staging,
+                            staging_buffer_updated = true,
                             view = d3d12.VERTEX_BUFFER_VIEW {
                                 BufferLocation = b->GetGPUVirtualAddress(),
                                 StrideInBytes = u32(d.stride),
@@ -501,6 +516,19 @@ submit_command_list :: proc(s: ^State, commands: rc.CommandList) {
                 }
 
                 set_resource(s, c.handle, rd)
+
+                free(c.data)
+            }
+
+            case rc.UpdateBuffer: {
+                if vb, ok := &s.resources[c.handle].resource.(VertexBuffer); ok {
+                    gpu_data: rawptr
+                    read_range: d3d12.RANGE
+                    hr = vb->staging_buffer->Map(0, &read_range, &gpu_data)
+                    check(hr, s.info_queue, "Failed creating verex buffer resource")
+                    mem.copy(gpu_data, c.data, c.size)
+                    vb->staging_buffer->Unmap(0, nil)
+                }
 
                 free(c.data)
             }
@@ -528,6 +556,14 @@ ri_to_d3d_state :: proc(ri_state: rc.ResourceState) -> d3d12.RESOURCE_STATES {
 draw :: proc(s: ^State, commands: rc.CommandList) {
     hr: d3d12.HRESULT
     mem.copy(s.mat_ptr[s.frame_index], rawptr(&s.mvp[0]), 128)
+
+    for res in s.resources {
+        if vb, ok := res.resource.(VertexBuffer); ok {
+            if vb.staging_buffer_updated {
+                s.cmdlist->CopyBufferRegion(vb.buffer, 0, vb.staging_buffer, 0, u64(vb.view.SizeInBytes))
+            }
+        } 
+    }
 
     // This state is reset everytime the cmd list is reset, so we need to rebind it
     
@@ -656,18 +692,20 @@ check :: proc(res: d3d12.HRESULT, iq: ^d3d12.IInfoQueue, message: string) {
         return;
     }
 
-    n := iq->GetNumStoredMessages()
-    for i in 0..n {
-        msglen: d3d12.SIZE_T
-        iq->GetMessageA(i, nil, &msglen)
+    if iq != nil {
+        n := iq->GetNumStoredMessages()
+        for i in 0..n {
+            msglen: d3d12.SIZE_T
+            iq->GetMessageA(i, nil, &msglen)
 
-        if msglen > 0 {
-            fmt.println(msglen)
+            if msglen > 0 {
+                fmt.println(msglen)
 
-            msg := (^d3d12.MESSAGE)(mem.alloc(int(msglen)))
-            iq->GetMessageA(i, msg, &msglen)
-            fmt.println(msg.pDescription)
-            mem.free(msg)
+                msg := (^d3d12.MESSAGE)(mem.alloc(int(msglen)))
+                iq->GetMessageA(i, msg, &msglen)
+                fmt.println(msg.pDescription)
+                mem.free(msg)
+            }
         }
     }
 

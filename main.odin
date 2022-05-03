@@ -59,6 +59,8 @@ main :: proc() {
     }
     
     main_loop: for {
+        render_d3d12.new_frame(&renderer_state)
+
         for e: sdl2.Event; sdl2.PollEvent(&e) != 0; {
             #partial switch e.type {
                 case .QUIT:
@@ -79,11 +81,26 @@ main :: proc() {
                         mvp[3][0] += 0.1
                     }
 
+                    if e.key.keysym.sym == .B {
+                        cmdlist: rc.CommandList
+                        defer render_d3d12.submit_command_list(&renderer_state, cmdlist)
+                        defer delete(cmdlist)
+
+                        nv := [?]f32 {
+                            // pos            color
+                             0.0 , 1.0, 0.0,  1,0,0,0,
+                             0.5, -0.5, 0.0,  0,1,0,0,
+                            -0.5, -0.5, 0.0,  0,0,1,0,
+                        }
+
+                        nv_size := len(nv) * size_of(nv[0])
+                        rc.update_buffer(&cmdlist, vertex_buffer, rawptr(&nv[0]), nv_size)
+                    }
+
                     render_d3d12.set_mvp(&renderer_state, &mvp)
             }
         }
 
-        render_d3d12.new_frame(&renderer_state)
         cmdlist: rc.CommandList
         defer delete(cmdlist)
         append(&cmdlist, rc.SetPipeline {

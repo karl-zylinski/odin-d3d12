@@ -38,6 +38,12 @@ CreateBuffer :: struct {
     desc: BufferDesc,
 }
 
+UpdateBuffer :: struct {
+    handle: Handle,
+    data: rawptr,
+    size: int,
+}
+
 DrawCall :: struct {
     vertex_buffer: Handle,
 }
@@ -86,6 +92,7 @@ Command :: union {
     Execute,
     ResourceTransition,
     CreateBuffer,
+    UpdateBuffer,
     DrawCall,
     ClearRenderTarget,
     SetRenderTarget,
@@ -122,6 +129,17 @@ create_buffer :: proc(s: ^State, command_list: ^CommandList, desc: BufferDesc, d
     mem.copy(c.data, data, size)
     append(command_list, c)
     return h
+}
+
+update_buffer :: proc(command_list: ^CommandList, handle: Handle, data: rawptr, size: int) {
+    c := UpdateBuffer {
+        handle = handle,
+        data = mem.alloc(size),
+        size = size,
+    }
+
+    mem.copy(c.data, data, size)
+    append(command_list, c)
 }
 
 create_pipeline :: proc(s: ^State, command_list: ^CommandList, x: f32, y: f32, window_handle: render_types.WindowHandle) -> Handle {
