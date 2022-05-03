@@ -9,8 +9,8 @@ import "vendor:directx/dxgi"
 import "render_d3d12"
 import rc "render_commands"
 import "render_types"
-import "core:math/linalg/hlsl"
-import "core:math/linalg"
+import linh "core:math/linalg/hlsl"
+import lin "core:math/linalg"
 
 main :: proc() {
     // Init SDL and create window
@@ -20,8 +20,8 @@ main :: proc() {
     }
 
     defer sdl2.Quit()
-    wx := i32(1920)
-    wy := i32(1080)
+    wx := i32(640)
+    wy := i32(480)
     window := sdl2.CreateWindow("d3d12 triangle", sdl2.WINDOWPOS_UNDEFINED, sdl2.WINDOWPOS_UNDEFINED, wx, wy, { .ALLOW_HIGHDPI, .SHOWN, .RESIZABLE })
 
     if window == nil {
@@ -47,6 +47,46 @@ main :: proc() {
          0.0 , 0.5, 0.0,  1,0,0,0,
          0.5, -0.5, 0.0,  0,1,0,0,
         -0.5, -0.5, 0.0,  0,0,1,0,
+
+         1.0 , 0.5, 0.0,  1,0,0,0,
+         1.5, -0.5, 0.0,  0,1,0,0,
+         0.5, -0.5, 0.0,  0,0,1,0,
+
+         2.0 , 0.5, 0.0,  1,0,0,0,
+         2.5, -0.5, 0.0,  0,1,0,0,
+         1.5, -0.5, 0.0,  0,0,1,0,
+
+         3.0 , 0.5, 0.0,  1,0,0,0,
+         3.5, -0.5, 0.0,  0,1,0,0,
+         2.5, -0.5, 0.0,  0,0,1,0,
+
+         4.0 , 0.5, 0.0,  1,0,0,0,
+         4.5, -0.5, 0.0,  0,1,0,0,
+         3.5, -0.5, 0.0,  0,0,1,0,
+
+         5.0 , 0.5, 0.0,  1,0,0,0,
+         5.5, -0.5, 0.0,  0,1,0,0,
+         4.5, -0.5, 0.0,  0,0,1,0,
+
+         6.0 , 0.5, 0.0,  1,0,0,0,
+         6.5, -0.5, 0.0,  0,1,0,0,
+         5.5, -0.5, 0.0,  0,0,1,0,
+
+         7.0 , 0.5, 0.0,  1,0,0,0,
+         7.5, -0.5, 0.0,  0,1,0,0,
+         6.5, -0.5, 0.0,  0,0,1,0,
+
+         8.0 , 0.5, 0.0,  1,0,0,0,
+         8.5, -0.5, 0.0,  0,1,0,0,
+         7.5, -0.5, 0.0,  0,0,1,0,
+
+         9.0 , 0.5, 0.0,  1,0,0,0,
+         9.5, -0.5, 0.0,  0,1,0,0,
+         8.5, -0.5, 0.0,  0,0,1,0,
+
+         10.0 , 0.5, 0.0,  1,0,0,0,
+         10.5, -0.5, 0.0,  0,1,0,0,
+         9.5, -0.5, 0.0,  0,0,1,0,
     }
 
     vertex_buffer_size := len(vertices) * size_of(vertices[0])
@@ -60,16 +100,16 @@ main :: proc() {
         render_d3d12.submit_command_list(&renderer_state, cmdlist)
     }
 
-    camera_pos := hlsl.float3 { 0, 0, -1 }
+    camera_pos := linh.float3 { 0, 0, -1 }
     camera_yaw: f32 = 0
     camera_pitch: f32 = 0
 
     main_loop: for {
         render_d3d12.new_frame(&renderer_state)
 
-        camera_rot_x: hlsl.float4x4 = hlsl.float4x4(linalg.matrix4_rotate(camera_pitch, linalg.Vector3f32{1, 0, 0}))
-        camera_rot_y: hlsl.float4x4 = hlsl.float4x4(linalg.matrix4_rotate(camera_yaw, linalg.Vector3f32{0, 1, 0}))
-        camera_rot := linalg.mul(camera_rot_y, camera_rot_x)
+        camera_rot_x: linh.float4x4 = linh.float4x4(lin.matrix4_rotate(camera_pitch, lin.Vector3f32{1, 0, 0}))
+        camera_rot_y: linh.float4x4 = linh.float4x4(lin.matrix4_rotate(camera_yaw, lin.Vector3f32{0, 1, 0}))
+        camera_rot := lin.mul(camera_rot_y, camera_rot_x)
 
         for e: sdl2.Event; sdl2.PollEvent(&e) != 0; {
             #partial switch e.type {
@@ -77,16 +117,16 @@ main :: proc() {
                     break main_loop
                 case .KEYDOWN:
                     if e.key.keysym.sym == .W {
-                        camera_pos += linalg.mul(camera_rot, hlsl.float4{0,0,1,1}).xyz * 0.1
+                        camera_pos += lin.mul(camera_rot, linh.float4{0,0,1,1}).xyz * 0.1
                     }
                     if e.key.keysym.sym == .S {
-                        camera_pos -= linalg.mul(camera_rot, hlsl.float4{0,0,1,1}).xyz * 0.1
+                        camera_pos -= lin.mul(camera_rot, linh.float4{0,0,1,1}).xyz * 0.1
                     }
                     if e.key.keysym.sym == .A {
-                        camera_pos -= linalg.mul(camera_rot, hlsl.float4{1,0,0,1}).xyz * 0.1
+                        camera_pos -= lin.mul(camera_rot, linh.float4{1,0,0,1}).xyz * 0.1
                     }
                     if e.key.keysym.sym == .D {
-                        camera_pos += linalg.mul(camera_rot, hlsl.float4{1,0,0,1}).xyz * 0.1
+                        camera_pos += lin.mul(camera_rot, linh.float4{1,0,0,1}).xyz * 0.1
                     }
 
                     if e.key.keysym.sym == .B {
@@ -112,14 +152,14 @@ main :: proc() {
             }
         }
 
-        camera_trans: hlsl.float4x4 = 1
+        camera_trans: linh.float4x4 = 1
         camera_trans[3].xyz = ([3]f32)(camera_pos)
-        view: hlsl.float4x4 = hlsl.inverse(linalg.mul(camera_trans, camera_rot))
+        view: linh.float4x4 = linh.inverse(lin.mul(camera_trans, camera_rot))
 
         near: f32 = 0.01
         far: f32 = 100
 
-        mvp := linalg.mul(hlsl.float4x4 {
+        mvp := lin.mul(linh.float4x4 {
             1, 0, 0, 0,
             0, 1, 0, 0,
             0, 0, far/(far - near), (-far * near)/(far - near),
