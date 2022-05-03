@@ -14,11 +14,16 @@ import "../render_types"
 
 NUM_RENDERTARGETS :: 2
 
-VertexBuffer :: struct {
+BufferView :: union {
+    d3d12.VERTEX_BUFFER_VIEW,
+}
+
+Buffer :: struct {
     buffer: ^d3d12.IResource,
     staging_buffer: ^d3d12.IResource,
     staging_buffer_updated: bool,
-    view: d3d12.VERTEX_BUFFER_VIEW,
+    size: int,
+    view: BufferView,
 }
 
 Fence :: struct {
@@ -39,7 +44,7 @@ ResourceData :: union {
     None,
     Pipeline,
     Fence,
-    VertexBuffer,
+    Buffer,
 }
 
 Resource :: struct {
@@ -498,19 +503,19 @@ submit_command_list :: proc(s: ^State, commands: rc.CommandList) {
                 mem.copy(gpu_data, c.data, c.size)
                 b_staging->Unmap(0, nil)
 
-                rd: ResourceData
+                rd := Buffer {
+                    buffer = b,
+                    staging_buffer = b_staging,
+                    staging_buffer_updated = true,
+                    size = c.size,
+                }
 
                 switch d in c.desc {
                     case rc.VertexBufferDesc: {
-                        rd = VertexBuffer {
-                            buffer = b,
-                            staging_buffer = b_staging,
-                            staging_buffer_updated = true,
-                            view = d3d12.VERTEX_BUFFER_VIEW {
-                                BufferLocation = b->GetGPUVirtualAddress(),
-                                StrideInBytes = u32(d.stride),
-                                SizeInBytes = u32(c.size),
-                            },
+                        rd.view = d3d12.VERTEX_BUFFER_VIEW {
+                            BufferLocation = b->GetGPUVirtualAddress(),
+                            StrideInBytes = u32(d.stride),
+                            SizeInBytes = u32(c.size),
                         }
                     }
                 }
@@ -521,7 +526,7 @@ submit_command_list :: proc(s: ^State, commands: rc.CommandList) {
             }
 
             case rc.UpdateBuffer: {
-                if vb, ok := &s.resources[c.handle].resource.(VertexBuffer); ok {
+                if vb, ok := &s.resources[c.handle].resource.(Buffer); ok {
                     gpu_data: rawptr
                     read_range: d3d12.RANGE
                     hr = vb->staging_buffer->Map(0, &read_range, &gpu_data)
@@ -558,9 +563,10 @@ draw :: proc(s: ^State, commands: rc.CommandList) {
     mem.copy(s.mat_ptr[s.frame_index], rawptr(&s.mvp[0]), 128)
 
     for res in s.resources {
-        if vb, ok := res.resource.(VertexBuffer); ok {
-            if vb.staging_buffer_updated {
-                s.cmdlist->CopyBufferRegion(vb.buffer, 0, vb.staging_buffer, 0, u64(vb.view.SizeInBytes))
+        if b, ok := &res.resource.(Buffer); ok {
+            if b.staging_buffer_updated {
+                s.cmdlist->CopyBufferRegion(b.buffer, 0, b.staging_buffer, 0, u64(b.size))
+                b.staging_buffer_updated = false
             }
         } 
     }
@@ -618,11 +624,13 @@ draw :: proc(s: ^State, commands: rc.CommandList) {
                 s.cmdlist->ClearRenderTargetView(rtv_handle, (^[4]f32)(&cc), 0, nil)
 
             case rc.DrawCall:
-                if vb, ok := &s.resources[c.vertex_buffer].resource.(VertexBuffer); ok {
-                    num_instances := vb.view.SizeInBytes / vb.view.StrideInBytes
-                    s.cmdlist->IASetPrimitiveTopology(.TRIANGLELIST)
-                    s.cmdlist->IASetVertexBuffers(0, 1, &vb.view)
-                    s.cmdlist->DrawInstanced(num_instances, 1, 0, 0)
+                if b, ok := &s.resources[c.vertex_buffer].resource.(Buffer); ok {
+                    if vb_view, ok := &b.view.(d3d12.VERTEX_BUFFER_VIEW); ok {
+                        num_instances := vb_view.SizeInBytes / vb_view.StrideInBytes
+                        s.cmdlist->IASetPrimitiveTopology(.TRIANGLELIST)
+                        s.cmdlist->IASetVertexBuffers(0, 1, vb_view)
+                        s.cmdlist->DrawInstanced(num_instances, 1, 0, 0)
+                    }
                 }
 
             case rc.ResourceTransition:
