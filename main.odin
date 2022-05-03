@@ -107,8 +107,8 @@ main :: proc() {
     main_loop: for {
         render_d3d12.new_frame(&renderer_state)
 
-        camera_rot_x: linh.float4x4 = linh.float4x4(lin.matrix4_rotate(camera_pitch, lin.Vector3f32{1, 0, 0}))
-        camera_rot_y: linh.float4x4 = linh.float4x4(lin.matrix4_rotate(camera_yaw, lin.Vector3f32{0, 1, 0}))
+        camera_rot_x := lin.matrix4_rotate(camera_pitch, lin.Vector3f32{1, 0, 0})
+        camera_rot_y := lin.matrix4_rotate(camera_yaw, lin.Vector3f32{0, 1, 0})
         camera_rot := lin.mul(camera_rot_y, camera_rot_x)
 
         for e: sdl2.Event; sdl2.PollEvent(&e) != 0; {
@@ -154,7 +154,7 @@ main :: proc() {
 
         camera_trans: linh.float4x4 = 1
         camera_trans[3].xyz = ([3]f32)(camera_pos)
-        view: linh.float4x4 = linh.inverse(lin.mul(camera_trans, camera_rot))
+        view: linh.float4x4 = linh.inverse(lin.mul(camera_trans, linh.float4x4(camera_rot)))
 
         near: f32 = 0.01
         far: f32 = 100
