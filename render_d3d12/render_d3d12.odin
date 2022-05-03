@@ -487,33 +487,37 @@ submit_command_list :: proc(s: ^State, commands: rc.CommandList) {
                     Flags = .NONE,
                 }
 
-                b: ^d3d12.IResource
-                hr = s.device->CreateCommittedResource(&heap_props, .NONE, &resource_desc, .GENERIC_READ, nil, d3d12.IResource_UUID, (^rawptr)(&b))
-                check(hr, s.info_queue, "Failed creating vertex buffer")
-
-                b_staging: ^d3d12.IResource
-                hr = s.device->CreateCommittedResource(&heap_props, .NONE, &resource_desc, .GENERIC_READ, nil, d3d12.IResource_UUID, (^rawptr)(&b_staging))
-                check(hr, s.info_queue, "Failed creating vertex buffer")
-
-                gpu_data: rawptr
-                read_range: d3d12.RANGE
-
-                hr = b_staging->Map(0, &read_range, &gpu_data)
-                check(hr, s.info_queue, "Failed creating verex buffer resource")
-                mem.copy(gpu_data, c.data, c.size)
-                b_staging->Unmap(0, nil)
-
                 rd := Buffer {
-                    buffer = b,
-                    staging_buffer = b_staging,
-                    staging_buffer_updated = true,
                     size = c.size,
+                }
+
+                hr = s.device->CreateCommittedResource(&heap_props, .NONE, &resource_desc, .GENERIC_READ, nil, d3d12.IResource_UUID, (^rawptr)(&rd.buffer))
+                check(hr, s.info_queue, "Failed buffer")
+
+                switch c.type {
+                    case .Static:
+                        gpu_data: rawptr
+                        read_range: d3d12.RANGE
+                        hr = rd.buffer->Map(0, &read_range, &gpu_data)
+                        check(hr, s.info_queue, "Failed creating verex buffer resource")
+                        mem.copy(gpu_data, c.data, c.size)
+                        rd.buffer->Unmap(0, nil)
+                    case .Dynamic:
+                        hr = s.device->CreateCommittedResource(&heap_props, .NONE, &resource_desc, .GENERIC_READ, nil, d3d12.IResource_UUID, (^rawptr)(&rd.staging_buffer))
+                        check(hr, s.info_queue, "Failed creating staging buffer")
+                        gpu_data: rawptr
+                        read_range: d3d12.RANGE
+                        hr = rd.staging_buffer->Map(0, &read_range, &gpu_data)
+                        check(hr, s.info_queue, "Failed creating verex buffer resource")
+                        mem.copy(gpu_data, c.data, c.size)
+                        rd.staging_buffer->Unmap(0, nil)
+                        rd.staging_buffer_updated = true
                 }
 
                 switch d in c.desc {
                     case rc.VertexBufferDesc: {
                         rd.view = d3d12.VERTEX_BUFFER_VIEW {
-                            BufferLocation = b->GetGPUVirtualAddress(),
+                            BufferLocation = rd.buffer->GetGPUVirtualAddress(),
                             StrideInBytes = u32(d.stride),
                             SizeInBytes = u32(c.size),
                         }
@@ -521,18 +525,22 @@ submit_command_list :: proc(s: ^State, commands: rc.CommandList) {
                 }
 
                 set_resource(s, c.handle, rd)
-
                 free(c.data)
             }
 
             case rc.UpdateBuffer: {
-                if vb, ok := &s.resources[c.handle].resource.(Buffer); ok {
-                    gpu_data: rawptr
-                    read_range: d3d12.RANGE
-                    hr = vb->staging_buffer->Map(0, &read_range, &gpu_data)
-                    check(hr, s.info_queue, "Failed creating verex buffer resource")
-                    mem.copy(gpu_data, c.data, c.size)
-                    vb->staging_buffer->Unmap(0, nil)
+                if b, ok := &s.resources[c.handle].resource.(Buffer); ok {
+                    if b.staging_buffer != nil {
+                        gpu_data: rawptr
+                        read_range: d3d12.RANGE
+                        hr = b.staging_buffer->Map(0, &read_range, &gpu_data)
+                        check(hr, s.info_queue, "Failed creating vertex buffer resource")
+                        mem.copy(gpu_data, c.data, c.size)
+                        b.staging_buffer->Unmap(0, nil)
+                        b.staging_buffer_updated = true
+                    } else {
+                        fmt.println("Trying to update non-updatable buffer")
+                    }
                 }
 
                 free(c.data)
@@ -562,7 +570,7 @@ draw :: proc(s: ^State, commands: rc.CommandList) {
     hr: d3d12.HRESULT
     mem.copy(s.mat_ptr[s.frame_index], rawptr(&s.mvp[0]), 128)
 
-    for res in s.resources {
+    for res in &s.resources {
         if b, ok := &res.resource.(Buffer); ok {
             if b.staging_buffer_updated {
                 s.cmdlist->CopyBufferRegion(b.buffer, 0, b.staging_buffer, 0, u64(b.size))

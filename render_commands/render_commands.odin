@@ -18,6 +18,7 @@ Execute :: struct {
 }
 
 CreateFence :: distinct Handle
+
 WaitForFence :: struct {
     fence: Handle,
     pipeline: Handle,
@@ -31,11 +32,17 @@ BufferDesc :: union {
     VertexBufferDesc,
 }
 
+BufferType :: enum {
+    Static,
+    Dynamic,
+}
+
 CreateBuffer :: struct {
     handle: Handle,
     data: rawptr,
     size: int,
     desc: BufferDesc,
+    type: BufferType,
 }
 
 UpdateBuffer :: struct {
@@ -116,7 +123,7 @@ create_fence :: proc(s: ^State, command_list: ^CommandList) -> Handle {
     return h
 }
 
-create_buffer :: proc(s: ^State, command_list: ^CommandList, desc: BufferDesc, data: rawptr, size: int) -> Handle {
+create_buffer :: proc(s: ^State, command_list: ^CommandList, desc: BufferDesc, data: rawptr, size: int, type: BufferType) -> Handle {
     h := get_handle(s)
 
     c := CreateBuffer {
@@ -124,6 +131,7 @@ create_buffer :: proc(s: ^State, command_list: ^CommandList, desc: BufferDesc, d
         desc = desc,
         data = mem.alloc(size),
         size = size,
+        type = type,
     }
 
     mem.copy(c.data, data, size)

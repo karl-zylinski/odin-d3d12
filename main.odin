@@ -52,7 +52,7 @@ main :: proc() {
     {
         cmdlist: rc.CommandList
         pipeline = rc.create_pipeline(&ri_state, &cmdlist, f32(wx), f32(wy), render_types.WindowHandle(uintptr(window_handle)))
-        vertex_buffer = rc.create_buffer(&ri_state, &cmdlist, rc.VertexBufferDesc { stride = 28 }, rawptr(&vertices[0]), vertex_buffer_size)
+        vertex_buffer = rc.create_buffer(&ri_state, &cmdlist, rc.VertexBufferDesc { stride = 28 }, rawptr(&vertices[0]), vertex_buffer_size, .Dynamic)
         defer delete(cmdlist)
         fence = rc.create_fence(&ri_state, &cmdlist)
         render_d3d12.submit_command_list(&renderer_state, cmdlist)
