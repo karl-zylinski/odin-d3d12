@@ -9,6 +9,8 @@ import "vendor:directx/dxgi"
 import "render_d3d12"
 import rc "render_commands"
 import "render_types"
+import "core:math/linalg/hlsl"
+import "core:math/linalg"
 
 main :: proc() {
     // Init SDL and create window
@@ -18,8 +20,8 @@ main :: proc() {
     }
 
     defer sdl2.Quit()
-    wx := i32(640)
-    wy := i32(480)
+    wx := i32(1920)
+    wy := i32(1080)
     window := sdl2.CreateWindow("d3d12 triangle", sdl2.WINDOWPOS_UNDEFINED, sdl2.WINDOWPOS_UNDEFINED, wx, wy, { .ALLOW_HIGHDPI, .SHOWN, .RESIZABLE })
 
     if window == nil {
@@ -57,28 +59,34 @@ main :: proc() {
         fence = rc.create_fence(&ri_state, &cmdlist)
         render_d3d12.submit_command_list(&renderer_state, cmdlist)
     }
-    
+
+    camera_pos := hlsl.float3 { 0, 0, -1 }
+    camera_yaw: f32 = 0
+    camera_pitch: f32 = 0
+
     main_loop: for {
         render_d3d12.new_frame(&renderer_state)
+
+        camera_rot_x: hlsl.float4x4 = hlsl.float4x4(linalg.matrix4_rotate(camera_pitch, linalg.Vector3f32{1, 0, 0}))
+        camera_rot_y: hlsl.float4x4 = hlsl.float4x4(linalg.matrix4_rotate(camera_yaw, linalg.Vector3f32{0, 1, 0}))
+        camera_rot := linalg.mul(camera_rot_y, camera_rot_x)
 
         for e: sdl2.Event; sdl2.PollEvent(&e) != 0; {
             #partial switch e.type {
                 case .QUIT:
                     break main_loop
                 case .KEYDOWN:
-                    mvp := render_d3d12.mvp(&renderer_state)
-
-                    if e.key.keysym.sym == .UP {
-                        mvp[3][1] += 0.1
+                    if e.key.keysym.sym == .W {
+                        camera_pos += linalg.mul(camera_rot, hlsl.float4{0,0,1,1}).xyz * 0.1
                     }
-                    if e.key.keysym.sym == .DOWN {
-                        mvp[3][1] -= 0.1
+                    if e.key.keysym.sym == .S {
+                        camera_pos -= linalg.mul(camera_rot, hlsl.float4{0,0,1,1}).xyz * 0.1
                     }
-                    if e.key.keysym.sym == .LEFT {
-                        mvp[3][0] -= 0.1
+                    if e.key.keysym.sym == .A {
+                        camera_pos -= linalg.mul(camera_rot, hlsl.float4{1,0,0,1}).xyz * 0.1
                     }
-                    if e.key.keysym.sym == .RIGHT {
-                        mvp[3][0] += 0.1
+                    if e.key.keysym.sym == .D {
+                        camera_pos += linalg.mul(camera_rot, hlsl.float4{1,0,0,1}).xyz * 0.1
                     }
 
                     if e.key.keysym.sym == .B {
@@ -88,18 +96,36 @@ main :: proc() {
 
                         nv := [?]f32 {
                             // pos            color
-                             0.0 , 1.0, 0.0,  1,0,0,0,
-                             0.5, -0.5, 0.0,  0,1,0,0,
-                            -0.5, -0.5, 0.0,  0,0,1,0,
+                             0.0 , 1.0, 1.0,  1,0,0,0,
+                             0.5, -0.5, 1.0,  0,1,0,0,
+                            -0.5, -0.5, 1.0,  0,0,1,0,
                         }
 
                         nv_size := len(nv) * size_of(nv[0])
                         rc.update_buffer(&cmdlist, vertex_buffer, rawptr(&nv[0]), nv_size)
                     }
 
-                    render_d3d12.set_mvp(&renderer_state, &mvp)
+                case .MOUSEMOTION: {
+                    camera_yaw += f32(e.motion.xrel) * 0.001
+                    camera_pitch += f32(e.motion.yrel) * 0.001
+                }
             }
         }
+
+        camera_trans: hlsl.float4x4 = 1
+        camera_trans[3].xyz = ([3]f32)(camera_pos)
+        view: hlsl.float4x4 = hlsl.inverse(linalg.mul(camera_trans, camera_rot))
+
+        near: f32 = 0.01
+        far: f32 = 100
+
+        mvp := linalg.mul(hlsl.float4x4 {
+            1, 0, 0, 0,
+            0, 1, 0, 0,
+            0, 0, far/(far - near), (-far * near)/(far - near),
+            0, 0, 1.0, 0,
+        }, view)
+        render_d3d12.set_mvp(&renderer_state, &mvp)
 
         cmdlist: rc.CommandList
         defer delete(cmdlist)
@@ -117,7 +143,7 @@ main :: proc() {
             after = .RenderTarget,    
         })
         append(&cmdlist, rc.SetRenderTarget { })
-        append(&cmdlist, rc.ClearRenderTarget { clear_color = {1, 0, 0, 1} })
+        append(&cmdlist, rc.ClearRenderTarget { clear_color = {0, 0, 0, 1} })
         append(&cmdlist, rc.DrawCall {
             vertex_buffer = vertex_buffer,
         })
