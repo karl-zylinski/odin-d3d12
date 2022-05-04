@@ -91,6 +91,16 @@ CreatePipeline :: struct {
     window_handle: render_types.WindowHandle,
 }
 
+CreateShader :: struct {
+    handle: Handle,
+    code: rawptr,
+    size: int,
+}
+
+SetShader :: struct {
+    handle: Handle,
+}
+
 Command :: union {
     Noop,
     Present,
@@ -107,6 +117,8 @@ Command :: union {
     SetScissor,
     SetPipeline,
     CreatePipeline,
+    CreateShader,
+    SetShader,
 }
 
 CommandList :: distinct [dynamic]Command
@@ -158,6 +170,20 @@ create_pipeline :: proc(s: ^State, command_list: ^CommandList, x: f32, y: f32, w
         swapchain_x = x,
         swapchain_y = y,
         window_handle = window_handle,
+    }
+
+    append(command_list, c)
+    return h
+}
+
+
+create_shader :: proc(s: ^State, command_list: ^CommandList, code: rawptr, size: int) -> Handle {
+    h := get_handle(s)
+
+    c := CreateShader {
+        handle = h,
+        code = code,
+        size = size,
     }
 
     append(command_list, c)

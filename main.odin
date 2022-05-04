@@ -41,6 +41,7 @@ main :: proc() {
     fence: render_types.Handle
     vertex_buffer: render_types.Handle
     pipeline: render_types.Handle
+    shader: render_types.Handle
 
     vertices := [?]f32 {
         // pos            color
@@ -94,6 +95,12 @@ main :: proc() {
     {
         cmdlist: rc.CommandList
         pipeline = rc.create_pipeline(&ri_state, &cmdlist, f32(wx), f32(wy), render_types.WindowHandle(uintptr(window_handle)))
+        f, err := os.open("shader.shader")
+        defer os.close(f)
+        fs, _ := os.file_size(f)
+        shader_code := make([]byte, fs, context.temp_allocator)
+        os.read(f, shader_code)
+        shader = rc.create_shader(&ri_state, &cmdlist, rawptr(&shader_code[0]), int(fs))
         vertex_buffer = rc.create_buffer(&ri_state, &cmdlist, rc.VertexBufferDesc { stride = 28 }, rawptr(&vertices[0]), vertex_buffer_size, .Dynamic)
         defer delete(cmdlist)
         fence = rc.create_fence(&ri_state, &cmdlist)
@@ -168,11 +175,14 @@ main :: proc() {
         render_d3d12.set_mvp(&renderer_state, &mvp)
 
         render_d3d12.update(&renderer_state)
-        
+
         cmdlist: rc.CommandList
         defer delete(cmdlist)
         append(&cmdlist, rc.SetPipeline {
             handle = pipeline,
+        })
+        append(&cmdlist, rc.SetShader {
+            handle = shader,
         })
         append(&cmdlist, rc.SetScissor {
             rect = { w = f32(wx), h = f32(wy), },

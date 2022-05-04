@@ -40,11 +40,16 @@ Pipeline :: struct {
 None :: struct {
 }
 
+Shader :: struct {
+    pipeline_state: ^d3d12.IPipelineState,
+}
+
 ResourceData :: union {
     None,
     Pipeline,
     Fence,
     Buffer,
+    Shader,
 }
 
 Resource :: struct {
@@ -67,7 +72,6 @@ State :: struct {
     mat_ptr: [NUM_RENDERTARGETS]^hlsl.float4x4,
     command_allocator: ^d3d12.ICommandAllocator,
     root_signature: ^d3d12.IRootSignature,
-    pipeline: ^d3d12.IPipelineState,
     cmdlist: ^d3d12.IGraphicsCommandList,
     wx: i32,
     wy: i32,
@@ -147,7 +151,13 @@ set_resource :: proc(s: ^State, handle: render_types.Handle, res: ResourceData) 
 submit_command_list :: proc(s: ^State, commands: rc.CommandList) {
     hr: d3d12.HRESULT
     for command in commands {
-        #partial switch c in command {
+        switch c in command {
+            case rc.Noop: {}
+            case rc.SetShader: {
+                if shader, ok := &s.resources[c.handle].resource.(Shader); ok {
+                    s.cmdlist->SetPipelineState(shader.pipeline_state)
+                }
+            }
             case rc.CreatePipeline: {
                 p: Pipeline
                 {
@@ -322,137 +332,119 @@ submit_command_list :: proc(s: ^State, commands: rc.CommandList) {
                     serialized_desc->Release()
                 }
 
-                // The pipeline contains the shaders etc to use
-                {
-                    // Compile vertex and pixel shaders
-                    data :cstring=
-                        `cbuffer matrices : register(b0) {
-                            float4x4 mvp;
-                        };
-                        struct PSInput {
-                           float4 position : SV_POSITION;
-                           float4 color : COLOR;
-                        };
-                        PSInput VSMain(float4 position : POSITION0, float4 color : COLOR0) {
-                           PSInput result;
-                           result.position = mul(mvp, position);
-                           result.color = color;
-                           return result;
-                        }
-                        float4 PSMain(PSInput input) : SV_TARGET {
-                           return input.color;
-                        };`
-
-                    data_size: uint = len(data)
-
-                    compile_flags: u32 = 0
-                    when ODIN_DEBUG {
-                        compile_flags |= u32(d3d_compiler.D3DCOMPILE.DEBUG)
-                        compile_flags |= u32(d3d_compiler.D3DCOMPILE.SKIP_OPTIMIZATION)
-                    }
-
-                    vs: ^d3d12.IBlob = nil
-                    ps: ^d3d12.IBlob = nil
-
-                    hr = d3d_compiler.Compile(rawptr(data), data_size, nil, nil, nil, "VSMain", "vs_4_0", compile_flags, 0, &vs, nil)
-                    check(hr, s.info_queue, "Failed to compile vertex shader")
-
-                    hr = d3d_compiler.Compile(rawptr(data), data_size, nil, nil, nil, "PSMain", "ps_4_0", compile_flags, 0, &ps, nil)
-                    check(hr, s.info_queue, "Failed to compile pixel shader")
-
-                    // This layout matches the vertices data defined further down
-                    vertex_format: []d3d12.INPUT_ELEMENT_DESC = {
-                        { 
-                            SemanticName = "POSITION", 
-                            Format = .R32G32B32_FLOAT, 
-                            InputSlotClass = .PER_VERTEX_DATA, 
-                        },
-                        {   
-                            SemanticName = "COLOR", 
-                            Format = .R32G32B32A32_FLOAT, 
-                            AlignedByteOffset = size_of(f32) * 3, 
-                            InputSlotClass = .PER_VERTEX_DATA, 
-                        },
-                    }
-
-                    default_blend_state := d3d12.RENDER_TARGET_BLEND_DESC {
-                        BlendEnable = false,
-                        LogicOpEnable = false,
-
-                        SrcBlend = .ONE,
-                        DestBlend = .ZERO,
-                        BlendOp = .ADD,
-
-                        SrcBlendAlpha = .ONE,
-                        DestBlendAlpha = .ZERO,
-                        BlendOpAlpha = .ADD,
-
-                        LogicOp = .NOOP,
-                        RenderTargetWriteMask = u8(d3d12.COLOR_WRITE_ENABLE.ALL),
-                    };
-
-                    pipeline_state_desc := d3d12.GRAPHICS_PIPELINE_STATE_DESC {
-                        pRootSignature = s.root_signature,
-                        VS = {
-                            pShaderBytecode = vs->GetBufferPointer(),
-                            BytecodeLength = vs->GetBufferSize(),
-                        },
-                        PS = {
-                            pShaderBytecode = ps->GetBufferPointer(),
-                            BytecodeLength = ps->GetBufferSize(),
-                        },
-                        StreamOutput = {},
-                        BlendState = {
-                            AlphaToCoverageEnable = false,
-                            IndependentBlendEnable = false,
-                            RenderTarget = { 0 = default_blend_state, 1..7 = {} },
-                        },
-                        SampleMask = 0xFFFFFFFF,
-                        RasterizerState = {
-                            FillMode = .SOLID,
-                            CullMode = .BACK,
-                            FrontCounterClockwise = false,
-                            DepthBias = 0,
-                            DepthBiasClamp = 0,
-                            SlopeScaledDepthBias = 0,
-                            DepthClipEnable = true,
-                            MultisampleEnable = false,
-                            AntialiasedLineEnable = false,
-                            ForcedSampleCount = 0,
-                            ConservativeRaster = .OFF,
-                        },
-                        DepthStencilState = {
-                            DepthEnable = false,
-                            StencilEnable = false,
-                        },
-                        InputLayout = {
-                            pInputElementDescs = &vertex_format[0],
-                            NumElements = u32(len(vertex_format)),
-                        },
-                        PrimitiveTopologyType = .TRIANGLE,
-                        NumRenderTargets = 1,
-                        RTVFormats = { 0 = .R8G8B8A8_UNORM, 1..7 = .UNKNOWN },
-                        DSVFormat = .UNKNOWN,
-                        SampleDesc = {
-                            Count = 1,
-                            Quality = 0,
-                        },
-                    };
-                    
-                    hr = s.device->CreateGraphicsPipelineState(&pipeline_state_desc, d3d12.IPipelineState_UUID, (^rawptr)(&s.pipeline))
-                    check(hr, s.info_queue, "Pipeline creation failed")
-
-                    vs->Release()
-                    ps->Release()
-                }
 
                 // Create the commandlist that is reused further down.
-                hr = s.device->CreateCommandList(0, .DIRECT, s.command_allocator, s.pipeline, d3d12.ICommandList_UUID, (^rawptr)(&s.cmdlist))
+                hr = s.device->CreateCommandList(0, .DIRECT, s.command_allocator, nil, d3d12.ICommandList_UUID, (^rawptr)(&s.cmdlist))
                 check(hr, s.info_queue, "Failed to create command list")
                 hr = s.cmdlist->Close()
                 check(hr, s.info_queue, "Failed to close command list")
 
                 set_resource(s, c.handle, p)
+            }
+            case rc.CreateShader: {
+                compile_flags: u32 = 0
+                when ODIN_DEBUG {
+                    compile_flags |= u32(d3d_compiler.D3DCOMPILE.DEBUG)
+                    compile_flags |= u32(d3d_compiler.D3DCOMPILE.SKIP_OPTIMIZATION)
+                }
+
+                vs: ^d3d12.IBlob = nil
+                ps: ^d3d12.IBlob = nil
+
+                hr = d3d_compiler.Compile(c.code, uint(c.size), nil, nil, nil, "VSMain", "vs_4_0", compile_flags, 0, &vs, nil)
+                check(hr, s.info_queue, "Failed to compile vertex shader")
+
+                hr = d3d_compiler.Compile(c.code, uint(c.size), nil, nil, nil, "PSMain", "ps_4_0", compile_flags, 0, &ps, nil)
+                check(hr, s.info_queue, "Failed to compile pixel shader")
+
+                // This layout matches the vertices data defined further down
+                vertex_format: []d3d12.INPUT_ELEMENT_DESC = {
+                    { 
+                        SemanticName = "POSITION", 
+                        Format = .R32G32B32_FLOAT, 
+                        InputSlotClass = .PER_VERTEX_DATA, 
+                    },
+                    {   
+                        SemanticName = "COLOR", 
+                        Format = .R32G32B32A32_FLOAT, 
+                        AlignedByteOffset = size_of(f32) * 3, 
+                        InputSlotClass = .PER_VERTEX_DATA, 
+                    },
+                }
+
+                default_blend_state := d3d12.RENDER_TARGET_BLEND_DESC {
+                    BlendEnable = false,
+                    LogicOpEnable = false,
+
+                    SrcBlend = .ONE,
+                    DestBlend = .ZERO,
+                    BlendOp = .ADD,
+
+                    SrcBlendAlpha = .ONE,
+                    DestBlendAlpha = .ZERO,
+                    BlendOpAlpha = .ADD,
+
+                    LogicOp = .NOOP,
+                    RenderTargetWriteMask = u8(d3d12.COLOR_WRITE_ENABLE.ALL),
+                };
+
+                pipeline_state_desc := d3d12.GRAPHICS_PIPELINE_STATE_DESC {
+                    pRootSignature = s.root_signature,
+                    VS = {
+                        pShaderBytecode = vs->GetBufferPointer(),
+                        BytecodeLength = vs->GetBufferSize(),
+                    },
+                    PS = {
+                        pShaderBytecode = ps->GetBufferPointer(),
+                        BytecodeLength = ps->GetBufferSize(),
+                    },
+                    StreamOutput = {},
+                    BlendState = {
+                        AlphaToCoverageEnable = false,
+                        IndependentBlendEnable = false,
+                        RenderTarget = { 0 = default_blend_state, 1..7 = {} },
+                    },
+                    SampleMask = 0xFFFFFFFF,
+                    RasterizerState = {
+                        FillMode = .SOLID,
+                        CullMode = .BACK,
+                        FrontCounterClockwise = false,
+                        DepthBias = 0,
+                        DepthBiasClamp = 0,
+                        SlopeScaledDepthBias = 0,
+                        DepthClipEnable = true,
+                        MultisampleEnable = false,
+                        AntialiasedLineEnable = false,
+                        ForcedSampleCount = 0,
+                        ConservativeRaster = .OFF,
+                    },
+                    DepthStencilState = {
+                        DepthEnable = false,
+                        StencilEnable = false,
+                    },
+                    InputLayout = {
+                        pInputElementDescs = &vertex_format[0],
+                        NumElements = u32(len(vertex_format)),
+                    },
+                    PrimitiveTopologyType = .TRIANGLE,
+                    NumRenderTargets = 1,
+                    RTVFormats = { 0 = .R8G8B8A8_UNORM, 1..7 = .UNKNOWN },
+                    DSVFormat = .UNKNOWN,
+                    SampleDesc = {
+                        Count = 1,
+                        Quality = 0,
+                    },
+                };
+                
+                rd: Shader
+
+                hr = s.device->CreateGraphicsPipelineState(&pipeline_state_desc, d3d12.IPipelineState_UUID, (^rawptr)(&rd.pipeline_state))
+                check(hr, s.info_queue, "Pipeline creation failed")
+
+                vs->Release()
+                ps->Release()
+
+                set_resource(s, c.handle, rd)
             }
             case rc.CreateFence: {
                 f: Fence
@@ -663,7 +655,7 @@ new_frame :: proc(s: ^State) {
     hr = s.command_allocator->Reset()
     check(hr, s.info_queue, "Failed resetting command allocator")
 
-    hr = s.cmdlist->Reset(s.command_allocator, s.pipeline)
+    hr = s.cmdlist->Reset(s.command_allocator, nil)
     check(hr, s.info_queue, "Failed to reset command list")
 }
 
