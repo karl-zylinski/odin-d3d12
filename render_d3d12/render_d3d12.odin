@@ -545,44 +545,7 @@ submit_command_list :: proc(s: ^State, commands: rc.CommandList) {
 
                 free(c.data)
             }
-        }
-    }
-}
 
-new_frame :: proc(s: ^State) {
-    hr: d3d12.HRESULT
-    hr = s.command_allocator->Reset()
-    check(hr, s.info_queue, "Failed resetting command allocator")
-
-    hr = s.cmdlist->Reset(s.command_allocator, s.pipeline)
-    check(hr, s.info_queue, "Failed to reset command list")
-}
-
-ri_to_d3d_state :: proc(ri_state: rc.ResourceState) -> d3d12.RESOURCE_STATES {
-    switch ri_state {
-        case .Present: return .PRESENT
-        case .RenderTarget: return .RENDER_TARGET
-    }
-    return .COMMON
-}
-
-draw :: proc(s: ^State, commands: rc.CommandList) {
-    hr: d3d12.HRESULT
-    mem.copy(s.mat_ptr[s.frame_index], rawptr(&s.mvp[0]), 128)
-
-    for res in &s.resources {
-        if b, ok := &res.resource.(Buffer); ok {
-            if b.staging_buffer_updated {
-                s.cmdlist->CopyBufferRegion(b.buffer, 0, b.staging_buffer, 0, u64(b.size))
-                b.staging_buffer_updated = false
-            }
-        } 
-    }
-
-    // This state is reset everytime the cmd list is reset, so we need to rebind it
-    
-    for command in commands {
-        #partial switch c in command {
             case rc.SetPipeline:
                 if p, ok := &s.resources[c.handle].resource.(Pipeline); ok {
                     s.cmdlist->SetGraphicsRootSignature(s.root_signature)
@@ -692,6 +655,37 @@ draw :: proc(s: ^State, commands: rc.CommandList) {
                     }
                 }
         }
+    }
+}
+
+new_frame :: proc(s: ^State) {
+    hr: d3d12.HRESULT
+    hr = s.command_allocator->Reset()
+    check(hr, s.info_queue, "Failed resetting command allocator")
+
+    hr = s.cmdlist->Reset(s.command_allocator, s.pipeline)
+    check(hr, s.info_queue, "Failed to reset command list")
+}
+
+ri_to_d3d_state :: proc(ri_state: rc.ResourceState) -> d3d12.RESOURCE_STATES {
+    switch ri_state {
+        case .Present: return .PRESENT
+        case .RenderTarget: return .RENDER_TARGET
+    }
+    return .COMMON
+}
+
+update :: proc(s: ^State) {
+    hr: d3d12.HRESULT
+    mem.copy(s.mat_ptr[s.frame_index], rawptr(&s.mvp[0]), 128)
+
+    for res in &s.resources {
+        if b, ok := &res.resource.(Buffer); ok {
+            if b.staging_buffer_updated {
+                s.cmdlist->CopyBufferRegion(b.buffer, 0, b.staging_buffer, 0, u64(b.size))
+                b.staging_buffer_updated = false
+            }
+        } 
     }
 }
 

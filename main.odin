@@ -167,6 +167,8 @@ main :: proc() {
         }, view)
         render_d3d12.set_mvp(&renderer_state, &mvp)
 
+        render_d3d12.update(&renderer_state)
+        
         cmdlist: rc.CommandList
         defer delete(cmdlist)
         append(&cmdlist, rc.SetPipeline {
@@ -194,6 +196,6 @@ main :: proc() {
         append(&cmdlist, rc.Execute{ pipeline = pipeline, })
         append(&cmdlist, rc.Present{ handle = pipeline })
         append(&cmdlist, rc.WaitForFence { fence = fence, pipeline = pipeline, })
-        render_d3d12.draw(&renderer_state, cmdlist)
+        render_d3d12.submit_command_list(&renderer_state, cmdlist)
     }
 }
