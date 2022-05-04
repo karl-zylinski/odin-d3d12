@@ -194,8 +194,8 @@ main :: proc() {
             before = .Present,
             after = .RenderTarget,    
         })
-        append(&cmdlist, rc.SetRenderTarget { })
         append(&cmdlist, rc.ClearRenderTarget { clear_color = {0, 0, 0, 1} })
+        append(&cmdlist, rc.SetRenderTarget { })
         append(&cmdlist, rc.DrawCall {
             vertex_buffer = vertex_buffer,
         })
