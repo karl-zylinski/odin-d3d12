@@ -374,12 +374,12 @@ submit_command_list :: proc(s: ^State, commands: rc.CommandList) {
                         Format = .R32G32B32_FLOAT, 
                         InputSlotClass = .PER_VERTEX_DATA, 
                     },
-                    {   
+                 /*   {   
                         SemanticName = "COLOR", 
                         Format = .R32G32B32A32_FLOAT, 
                         AlignedByteOffset = size_of(f32) * 3, 
                         InputSlotClass = .PER_VERTEX_DATA, 
-                    },
+                    },*/
                 }
 
                 default_blend_state := d3d12.RENDER_TARGET_BLEND_DESC {

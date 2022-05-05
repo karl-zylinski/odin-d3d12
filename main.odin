@@ -2,6 +2,8 @@ package zg
 
 import "core:fmt"
 import "core:mem"
+import "core:strconv"
+import "core:strings"
 import "core:sys/windows"
 import "core:os"
 import "vendor:sdl2"
@@ -12,6 +14,108 @@ import "render_types"
 import linh "core:math/linalg/hlsl"
 import lin "core:math/linalg"
 
+load_teapot :: proc() -> ([dynamic]f32, [dynamic]int)  {
+    f, err := os.open("teapot.obj")
+    defer os.close(f)
+    fs, _ := os.file_size(f)
+    teapot_bytes := make([]byte, fs, context.temp_allocator)
+    os.read(f, teapot_bytes)
+    teapot := strings.string_from_ptr(&teapot_bytes[0], int(fs))
+    out: [dynamic]f32
+    indices_out: [dynamic]int
+
+    parse_comment :: proc(teapot: string, i_in: int) -> int {
+        i := i_in
+        for teapot[i] != '\n' {
+            i += 1
+        }
+
+        i += 1
+        return i
+    }
+
+    skip_whitespace :: proc(teapot: string, i_in: int) -> int {
+        i := i_in
+
+        for i < len(teapot) {
+            if teapot[i] != ' ' && teapot[i] != '\t' && teapot[i] != '\n' {
+                return i
+            }
+            i += 1
+        }
+
+        return i
+    }
+
+    parse_number :: proc(teapot: string, i_in: int) -> (int, f32) {
+        i := i_in
+        start := i
+
+        for teapot[i] != ' ' && teapot[i] != '\n' && teapot[i] != '\t' {
+            i += 1
+        }
+
+        num, ok := strconv.parse_f32(teapot[start:i])
+        return i, num
+    }
+
+    parse_vertex :: proc(teapot: string, i_in: int, out: ^[dynamic]f32) -> int {
+        i := skip_whitespace(teapot, i_in + 1)
+        n0, n1, n2: f32
+        i, n0 = parse_number(teapot, i)
+        i = skip_whitespace(teapot, i)
+        i, n1 = parse_number(teapot, i)
+        i = skip_whitespace(teapot, i)
+        i, n2 = parse_number(teapot, i)
+        append(out, n0, n1, n2)
+        return i
+    }
+
+    parse_face_index :: proc(teapot: string, i_in: int) -> (int, int, int) {
+        i := i_in
+        start := i
+
+        for teapot[i] != '/' {
+            i += 1
+        }
+
+        ii, _ := strconv.parse_int(teapot[start:i])
+        i += 2
+
+        start = i
+
+        for teapot[i] != ' ' && teapot[i] != '\n' && teapot[i] != '\t' {
+            i += 1
+        }
+
+        ni, _ := strconv.parse_int(teapot[start:i])
+
+        return i, ii, ni
+    }
+
+    parse_face :: proc(teapot: string, i_in: int, out: ^[dynamic]int) -> int {
+        i := skip_whitespace(teapot, i_in + 1)
+        n0, n1, n2: int
+        i, n0, _ = parse_face_index(teapot, i)
+        i = skip_whitespace(teapot, i)
+        i, n1, _ = parse_face_index(teapot, i)
+        i = skip_whitespace(teapot, i)
+        i, n2, _ = parse_face_index(teapot, i)
+        append(out, n0, n1, n2)
+        return i
+    }
+
+    for i := 0; i < len(teapot); i += 1 {
+        switch teapot[i] {
+            case '#': i = parse_comment(teapot, i)
+            case 'v': i = parse_vertex(teapot, i, &out)
+            case 'f': i = parse_face(teapot, i, &indices_out)
+        }
+    }
+
+    return out, indices_out
+}
+
 main :: proc() {
     // Init SDL and create window
     if err := sdl2.Init({.VIDEO}); err != 0 {
@@ -20,8 +124,8 @@ main :: proc() {
     }
 
     defer sdl2.Quit()
-    wx := i32(640)
-    wy := i32(480)
+    wx := i32(1200)
+    wy := i32(1200)
     window := sdl2.CreateWindow("d3d12 triangle", sdl2.WINDOWPOS_UNDEFINED, sdl2.WINDOWPOS_UNDEFINED, wx, wy, { .ALLOW_HIGHDPI, .SHOWN, .RESIZABLE })
 
     if window == nil {
@@ -29,7 +133,12 @@ main :: proc() {
         return
     }
 
+    sdl2.SetWindowGrab(window, true)
+    sdl2.CaptureMouse(true)
+    sdl2.SetRelativeMouseMode(true)
     defer sdl2.DestroyWindow(window)
+
+    vertices, indices := load_teapot()
 
     // Get the window handle from SDL
     window_info: sdl2.SysWMinfo
@@ -41,53 +150,6 @@ main :: proc() {
     vertex_buffer: render_types.Handle
     pipeline: render_types.Handle
     shader: render_types.Handle
-
-    vertices := [?]f32 {
-        // pos            color
-         0.0 , 0.5, 0.0,  1,0,0,0,
-         0.5, -0.5, 0.0,  0,1,0,0,
-        -0.5, -0.5, 0.0,  0,0,1,0,
-
-         1.0 , 0.5, 0.0,  1,0,0,0,
-         1.5, -0.5, 0.0,  0,1,0,0,
-         0.5, -0.5, 0.0,  0,0,1,0,
-
-         2.0 , 0.5, 0.0,  1,0,0,0,
-         2.5, -0.5, 0.0,  0,1,0,0,
-         1.5, -0.5, 0.0,  0,0,1,0,
-
-         3.0 , 0.5, 0.0,  1,0,0,0,
-         3.5, -0.5, 0.0,  0,1,0,0,
-         2.5, -0.5, 0.0,  0,0,1,0,
-
-         4.0 , 0.5, 0.0,  1,0,0,0,
-         4.5, -0.5, 0.0,  0,1,0,0,
-         3.5, -0.5, 0.0,  0,0,1,0,
-
-         5.0 , 0.5, 0.0,  1,0,0,0,
-         5.5, -0.5, 0.0,  0,1,0,0,
-         4.5, -0.5, 0.0,  0,0,1,0,
-
-         6.0 , 0.5, 0.0,  1,0,0,0,
-         6.5, -0.5, 0.0,  0,1,0,0,
-         5.5, -0.5, 0.0,  0,0,1,0,
-
-         7.0 , 0.5, 0.0,  1,0,0,0,
-         7.5, -0.5, 0.0,  0,1,0,0,
-         6.5, -0.5, 0.0,  0,0,1,0,
-
-         8.0 , 0.5, 0.0,  1,0,0,0,
-         8.5, -0.5, 0.0,  0,1,0,0,
-         7.5, -0.5, 0.0,  0,0,1,0,
-
-         9.0 , 0.5, 0.0,  1,0,0,0,
-         9.5, -0.5, 0.0,  0,1,0,0,
-         8.5, -0.5, 0.0,  0,0,1,0,
-
-         10.0 , 0.5, 0.0,  1,0,0,0,
-         10.5, -0.5, 0.0,  0,1,0,0,
-         9.5, -0.5, 0.0,  0,0,1,0,
-    }
 
     vertex_buffer_size := len(vertices) * size_of(vertices[0])
 
@@ -109,6 +171,7 @@ main :: proc() {
     camera_pos := linh.float3 { 0, 0, -1 }
     camera_yaw: f32 = 0
     camera_pitch: f32 = 0
+    input: [4]bool
 
     main_loop: for {
         render_d3d12.new_frame(&renderer_state, pipeline)
@@ -121,18 +184,32 @@ main :: proc() {
             #partial switch e.type {
                 case .QUIT:
                     break main_loop
-                case .KEYDOWN:
+                case .KEYUP: {
                     if e.key.keysym.sym == .W {
-                        camera_pos += lin.mul(camera_rot, linh.float4{0,0,1,1}).xyz * 0.1
+                        input[0] = false
                     }
                     if e.key.keysym.sym == .S {
-                        camera_pos -= lin.mul(camera_rot, linh.float4{0,0,1,1}).xyz * 0.1
+                        input[1] = false
                     }
                     if e.key.keysym.sym == .A {
-                        camera_pos -= lin.mul(camera_rot, linh.float4{1,0,0,1}).xyz * 0.1
+                        input[2] = false
                     }
                     if e.key.keysym.sym == .D {
-                        camera_pos += lin.mul(camera_rot, linh.float4{1,0,0,1}).xyz * 0.1
+                        input[3] = false
+                    }
+                }
+                case .KEYDOWN:
+                    if e.key.keysym.sym == .W {
+                        input[0] = true
+                    }
+                    if e.key.keysym.sym == .S {
+                        input[1] = true
+                    }
+                    if e.key.keysym.sym == .A {
+                        input[2] = true
+                    }
+                    if e.key.keysym.sym == .D {
+                        input[3] = true
                     }
 
                     if e.key.keysym.sym == .B {
@@ -156,6 +233,22 @@ main :: proc() {
                     camera_pitch += f32(e.motion.yrel) * 0.001
                 }
             }
+        }
+
+        if input[0] {
+            camera_pos += lin.mul(camera_rot, linh.float4{0,0,1,1}).xyz * 0.1
+        }
+
+        if input[1] {
+            camera_pos -= lin.mul(camera_rot, linh.float4{0,0,1,1}).xyz * 0.1
+        }
+
+        if input[2] {
+            camera_pos -= lin.mul(camera_rot, linh.float4{1,0,0,1}).xyz * 0.1
+        }
+            
+        if input[3] {
+            camera_pos += lin.mul(camera_rot, linh.float4{1,0,0,1}).xyz * 0.1
         }
 
         camera_trans: linh.float4x4 = 1

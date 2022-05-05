@@ -184,7 +184,6 @@ create_pipeline :: proc(s: ^State, command_list: ^CommandList, x: f32, y: f32, w
     return h
 }
 
-
 create_shader :: proc(s: ^State, command_list: ^CommandList, code: rawptr, size: int) -> Handle {
     h := get_handle(s)
 
