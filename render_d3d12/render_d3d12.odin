@@ -16,6 +16,7 @@ NUM_RENDERTARGETS :: 2
 
 BufferView :: union {
     d3d12.VERTEX_BUFFER_VIEW,
+    d3d12.INDEX_BUFFER_VIEW,
 }
 
 Buffer :: struct {
@@ -522,6 +523,13 @@ submit_command_list :: proc(s: ^State, commands: rc.CommandList) {
                             SizeInBytes = u32(c.size),
                         }
                     }
+                    case rc.IndexBufferDesc: {
+                        rd.view = d3d12.INDEX_BUFFER_VIEW {
+                            BufferLocation = rd.buffer->GetGPUVirtualAddress(),
+                            Format = .R32_UINT,
+                            SizeInBytes = u32(c.size),
+                        }
+                    }
                 }
 
                 set_resource(s, c.handle, rd)
@@ -595,14 +603,21 @@ submit_command_list :: proc(s: ^State, commands: rc.CommandList) {
                 }
 
             case rc.DrawCall:
+                vb_view: d3d12.VERTEX_BUFFER_VIEW
+                ib_view: d3d12.INDEX_BUFFER_VIEW
                 if b, ok := &s.resources[c.vertex_buffer].resource.(Buffer); ok {
-                    if vb_view, ok := &b.view.(d3d12.VERTEX_BUFFER_VIEW); ok {
-                        num_instances := vb_view.SizeInBytes / vb_view.StrideInBytes
-                        s.cmdlist->IASetPrimitiveTopology(.TRIANGLELIST)
-                        s.cmdlist->IASetVertexBuffers(0, 1, vb_view)
-                        s.cmdlist->DrawInstanced(num_instances, 1, 0, 0)
-                    }
+                    vb_view, _ = b.view.(d3d12.VERTEX_BUFFER_VIEW)
                 }
+
+                if b, ok := &s.resources[c.index_buffer].resource.(Buffer); ok {
+                    ib_view, _ = b.view.(d3d12.INDEX_BUFFER_VIEW)
+                }
+
+                num_indices := ib_view.SizeInBytes / 4
+                s.cmdlist->IASetPrimitiveTopology(.TRIANGLELIST)
+                s.cmdlist->IASetVertexBuffers(0, 1, &vb_view)
+                s.cmdlist->IASetIndexBuffer(&ib_view)
+                s.cmdlist->DrawIndexedInstanced(num_indices, 1, 0, 0, 0)
 
             case rc.ResourceTransition:
                 if p, ok := &s.resources[c.render_target.pipeline].resource.(Pipeline); ok {

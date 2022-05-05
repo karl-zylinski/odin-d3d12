@@ -10,7 +10,7 @@ struct PSInput {
 PSInput VSMain(float4 position : POSITION0) {
     PSInput result;
     result.position = mul(mvp, position);
-    result.color = float4(1,1,1,1);
+    result.color = float4(position.xyz, 1);
     return result;
 }
 

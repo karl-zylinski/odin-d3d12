@@ -14,7 +14,7 @@ import "render_types"
 import linh "core:math/linalg/hlsl"
 import lin "core:math/linalg"
 
-load_teapot :: proc() -> ([dynamic]f32, [dynamic]int)  {
+load_teapot :: proc() -> ([dynamic]f32, [dynamic]u32)  {
     f, err := os.open("teapot.obj")
     defer os.close(f)
     fs, _ := os.file_size(f)
@@ -22,7 +22,7 @@ load_teapot :: proc() -> ([dynamic]f32, [dynamic]int)  {
     os.read(f, teapot_bytes)
     teapot := strings.string_from_ptr(&teapot_bytes[0], int(fs))
     out: [dynamic]f32
-    indices_out: [dynamic]int
+    indices_out: [dynamic]u32
 
     parse_comment :: proc(teapot: string, i_in: int) -> int {
         i := i_in
@@ -71,7 +71,7 @@ load_teapot :: proc() -> ([dynamic]f32, [dynamic]int)  {
         return i
     }
 
-    parse_face_index :: proc(teapot: string, i_in: int) -> (int, int, int) {
+    parse_face_index :: proc(teapot: string, i_in: int) -> (int, u32, u32) {
         i := i_in
         start := i
 
@@ -90,12 +90,12 @@ load_teapot :: proc() -> ([dynamic]f32, [dynamic]int)  {
 
         ni, _ := strconv.parse_int(teapot[start:i])
 
-        return i, ii, ni
+        return i, u32(ii - 1), u32(ni - 1)
     }
 
-    parse_face :: proc(teapot: string, i_in: int, out: ^[dynamic]int) -> int {
+    parse_face :: proc(teapot: string, i_in: int, out: ^[dynamic]u32) -> int {
         i := skip_whitespace(teapot, i_in + 1)
-        n0, n1, n2: int
+        n0, n1, n2: u32
         i, n0, _ = parse_face_index(teapot, i)
         i = skip_whitespace(teapot, i)
         i, n1, _ = parse_face_index(teapot, i)
@@ -108,10 +108,14 @@ load_teapot :: proc() -> ([dynamic]f32, [dynamic]int)  {
     for i := 0; i < len(teapot); i += 1 {
         switch teapot[i] {
             case '#': i = parse_comment(teapot, i)
-            case 'v': i = parse_vertex(teapot, i, &out)
+            case 'v': if teapot[i + 1] != 'n' {
+                i = parse_vertex(teapot, i, &out)
+            }
             case 'f': i = parse_face(teapot, i, &indices_out)
         }
     }
+
+    fmt.println(len(out)/3)
 
     return out, indices_out
 }
@@ -148,10 +152,12 @@ main :: proc() {
     ri_state: rc.State
     fence: render_types.Handle
     vertex_buffer: render_types.Handle
+    index_buffer: render_types.Handle
     pipeline: render_types.Handle
     shader: render_types.Handle
 
     vertex_buffer_size := len(vertices) * size_of(vertices[0])
+    index_buffer_size := len(indices) * size_of(indices[0])
 
     {
         cmdlist: rc.CommandList
@@ -162,7 +168,8 @@ main :: proc() {
         shader_code := make([]byte, fs, context.temp_allocator)
         os.read(f, shader_code)
         shader = rc.create_shader(&ri_state, &cmdlist, rawptr(&shader_code[0]), int(fs))
-        vertex_buffer = rc.create_buffer(&ri_state, &cmdlist, rc.VertexBufferDesc { stride = 28 }, rawptr(&vertices[0]), vertex_buffer_size, .Dynamic)
+        vertex_buffer = rc.create_buffer(&ri_state, &cmdlist, rc.VertexBufferDesc { stride = 12 }, rawptr(&vertices[0]), vertex_buffer_size, .Dynamic)
+        index_buffer = rc.create_buffer(&ri_state, &cmdlist, rc.IndexBufferDesc { stride = 4 }, rawptr(&indices[0]), index_buffer_size, .Dynamic)
         defer delete(cmdlist)
         fence = rc.create_fence(&ri_state, &cmdlist)
         render_d3d12.submit_command_list(&renderer_state, cmdlist)
@@ -291,6 +298,7 @@ main :: proc() {
         append(&cmdlist, rc.SetRenderTarget { render_target = { pipeline = pipeline, }, })
         append(&cmdlist, rc.DrawCall {
             vertex_buffer = vertex_buffer,
+            index_buffer = index_buffer,
         })
         append(&cmdlist, rc.ResourceTransition {
             before = .RenderTarget,

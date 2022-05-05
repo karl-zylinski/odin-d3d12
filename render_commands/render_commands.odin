@@ -28,8 +28,13 @@ VertexBufferDesc :: struct {
     stride: u32,
 }
 
+IndexBufferDesc :: struct {
+    stride: u32,
+}
+
 BufferDesc :: union {
     VertexBufferDesc,
+    IndexBufferDesc,
 }
 
 BufferType :: enum {
@@ -53,6 +58,7 @@ UpdateBuffer :: struct {
 
 DrawCall :: struct {
     vertex_buffer: Handle,
+    index_buffer: Handle,
 }
 
 ResourceState :: enum {
