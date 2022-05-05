@@ -60,17 +60,23 @@ ResourceState :: enum {
     RenderTarget,
 }
 
+RenderTarget :: struct {
+    pipeline: Handle,
+}
+
 ResourceTransition :: struct {
+    render_target: RenderTarget,
     before: ResourceState,
     after: ResourceState,
 }
 
 ClearRenderTarget :: struct {
+    render_target: RenderTarget,
     clear_color: hlsl.float4,
 }
 
 SetRenderTarget :: struct {
-
+    render_target: RenderTarget,
 }
 
 SetViewport :: struct {

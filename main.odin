@@ -174,7 +174,7 @@ main :: proc() {
         }, view)
         render_d3d12.set_mvp(&renderer_state, &mvp)
 
-        render_d3d12.update(&renderer_state)
+        render_d3d12.update(&renderer_state, pipeline)
 
         cmdlist: rc.CommandList
         defer delete(cmdlist)
@@ -194,8 +194,8 @@ main :: proc() {
             before = .Present,
             after = .RenderTarget,    
         })
-        append(&cmdlist, rc.ClearRenderTarget { clear_color = {0, 0, 0, 1} })
-        append(&cmdlist, rc.SetRenderTarget { })
+        append(&cmdlist, rc.ClearRenderTarget { render_target = { pipeline = pipeline, }, clear_color = {0, 0, 0, 1}, })
+        append(&cmdlist, rc.SetRenderTarget { render_target = { pipeline = pipeline, }, })
         append(&cmdlist, rc.DrawCall {
             vertex_buffer = vertex_buffer,
         })

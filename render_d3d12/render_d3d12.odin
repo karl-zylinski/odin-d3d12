@@ -10,7 +10,7 @@ import "core:math/linalg"
 import "core:sys/windows"
 import "core:os"
 import rc "../render_commands"
-import "../render_types"
+import rt "../render_types"
 
 NUM_RENDERTARGETS :: 2
 
@@ -35,6 +35,7 @@ Fence :: struct {
 Pipeline :: struct {
     swapchain: ^dxgi.ISwapChain3,
     queue: ^d3d12.ICommandQueue,
+    frame_index: u32,
 }
 
 None :: struct {
@@ -53,7 +54,7 @@ ResourceData :: union {
 }
 
 Resource :: struct {
-    handle: render_types.Handle,
+    handle: rt.Handle,
     resource: ResourceData,
 }
 
@@ -63,7 +64,6 @@ State :: struct {
     adapter: ^dxgi.IAdapter1,
     device: ^d3d12.IDevice,
     info_queue: ^d3d12.IInfoQueue,
-    frame_index: u32,
     rtv_descriptor_heap: ^d3d12.IDescriptorHeap,
     targets: [NUM_RENDERTARGETS]^d3d12.IResource,
     cbv_descriptor_heaps: [NUM_RENDERTARGETS]^d3d12.IDescriptorHeap,
@@ -138,7 +138,7 @@ create :: proc(wx: i32, wy: i32, window_handle: dxgi.HWND) -> (s: State) {
     return s
 }
 
-set_resource :: proc(s: ^State, handle: render_types.Handle, res: ResourceData) {
+set_resource :: proc(s: ^State, handle: rt.Handle, res: ResourceData) {
     index := int(handle)
 
     if len(s.resources) < index + 1 {
@@ -458,7 +458,7 @@ submit_command_list :: proc(s: ^State, commands: rc.CommandList) {
                     fmt.println("Failed to create fence event")
                 }
 
-                set_resource(s, render_types.Handle(c), f)
+                set_resource(s, rt.Handle(c), f)
             }
             case rc.CreateBuffer: {
                 // The position and color data for the triangle's vertices go together per-vertex
@@ -541,9 +541,9 @@ submit_command_list :: proc(s: ^State, commands: rc.CommandList) {
             case rc.SetPipeline:
                 if p, ok := &s.resources[c.handle].resource.(Pipeline); ok {
                     s.cmdlist->SetGraphicsRootSignature(s.root_signature)
-                    s.cmdlist->SetDescriptorHeaps(1, &s.cbv_descriptor_heaps[s.frame_index]);
+                    s.cmdlist->SetDescriptorHeaps(1, &s.cbv_descriptor_heaps[p.frame_index]);
                     table_handle: d3d12.GPU_DESCRIPTOR_HANDLE
-                    s.cbv_descriptor_heaps[s.frame_index]->GetGPUDescriptorHandleForHeapStart(&table_handle)
+                    s.cbv_descriptor_heaps[p.frame_index]->GetGPUDescriptorHandleForHeapStart(&table_handle)
                     s.cmdlist->SetGraphicsRootDescriptorTable(0, table_handle);
                 }
 
@@ -564,27 +564,31 @@ submit_command_list :: proc(s: ^State, commands: rc.CommandList) {
                 })
 
             case rc.SetRenderTarget:
-                rtv_handle: d3d12.CPU_DESCRIPTOR_HANDLE
-                s.rtv_descriptor_heap->GetCPUDescriptorHandleForHeapStart(&rtv_handle)
+                if p, ok := &s.resources[c.render_target.pipeline].resource.(Pipeline); ok {
+                    rtv_handle: d3d12.CPU_DESCRIPTOR_HANDLE
+                    s.rtv_descriptor_heap->GetCPUDescriptorHandleForHeapStart(&rtv_handle)
 
-                if (s.frame_index > 0) {
-                    size := s.device->GetDescriptorHandleIncrementSize(.RTV)
-                    rtv_handle.ptr += uint(s.frame_index * size)
+                    if (p.frame_index > 0) {
+                        size := s.device->GetDescriptorHandleIncrementSize(.RTV)
+                        rtv_handle.ptr += uint(p.frame_index * size)
+                    }
+
+                    s.cmdlist->OMSetRenderTargets(1, &rtv_handle, false, nil)
                 }
-
-                s.cmdlist->OMSetRenderTargets(1, &rtv_handle, false, nil)
 
             case rc.ClearRenderTarget: 
-                rtv_handle: d3d12.CPU_DESCRIPTOR_HANDLE
-                s.rtv_descriptor_heap->GetCPUDescriptorHandleForHeapStart(&rtv_handle)
+                if p, ok := &s.resources[c.render_target.pipeline].resource.(Pipeline); ok {
+                    rtv_handle: d3d12.CPU_DESCRIPTOR_HANDLE
+                    s.rtv_descriptor_heap->GetCPUDescriptorHandleForHeapStart(&rtv_handle)
 
-                if (s.frame_index > 0) {
-                    size := s.device->GetDescriptorHandleIncrementSize(.RTV)
-                    rtv_handle.ptr += uint(s.frame_index * size)
+                    if (p.frame_index > 0) {
+                        size := s.device->GetDescriptorHandleIncrementSize(.RTV)
+                        rtv_handle.ptr += uint(p.frame_index * size)
+                    }
+
+                    cc := c.clear_color
+                    s.cmdlist->ClearRenderTargetView(rtv_handle, (^[4]f32)(&cc), 0, nil)
                 }
-
-                cc := c.clear_color
-                s.cmdlist->ClearRenderTargetView(rtv_handle, (^[4]f32)(&cc), 0, nil)
 
             case rc.DrawCall:
                 if b, ok := &s.resources[c.vertex_buffer].resource.(Buffer); ok {
@@ -597,19 +601,21 @@ submit_command_list :: proc(s: ^State, commands: rc.CommandList) {
                 }
 
             case rc.ResourceTransition:
-                b := d3d12.RESOURCE_BARRIER {
-                    Type = .TRANSITION,
-                    Flags = .NONE,
-                }
+                if p, ok := &s.resources[c.render_target.pipeline].resource.(Pipeline); ok {
+                    b := d3d12.RESOURCE_BARRIER {
+                        Type = .TRANSITION,
+                        Flags = .NONE,
+                    }
 
-                b.Transition = {
-                    pResource = s.targets[s.frame_index],
-                    StateBefore = ri_to_d3d_state(c.before),
-                    StateAfter = ri_to_d3d_state(c.after),
-                    Subresource = d3d12.RESOURCE_BARRIER_ALL_SUBRESOURCES,
-                }
+                    b.Transition = {
+                        pResource = s.targets[p.frame_index],
+                        StateBefore = ri_to_d3d_state(c.before),
+                        StateAfter = ri_to_d3d_state(c.after),
+                        Subresource = d3d12.RESOURCE_BARRIER_ALL_SUBRESOURCES,
+                    }
 
-                s.cmdlist->ResourceBarrier(1, &b);
+                    s.cmdlist->ResourceBarrier(1, &b);
+                }
 
             case rc.Execute:
                 if p, ok := &s.resources[c.pipeline].resource.(Pipeline); ok {
@@ -625,7 +631,7 @@ submit_command_list :: proc(s: ^State, commands: rc.CommandList) {
                     params: dxgi.PRESENT_PARAMETERS
                     hr = p->swapchain->Present1(1, flags, &params)
                     check(hr, s.info_queue, "Present failed")
-                    s.frame_index = p->swapchain->GetCurrentBackBufferIndex()
+                    p.frame_index = p->swapchain->GetCurrentBackBufferIndex()
                 }
 
             case rc.WaitForFence:
@@ -667,17 +673,19 @@ ri_to_d3d_state :: proc(ri_state: rc.ResourceState) -> d3d12.RESOURCE_STATES {
     return .COMMON
 }
 
-update :: proc(s: ^State) {
-    hr: d3d12.HRESULT
-    mem.copy(s.mat_ptr[s.frame_index], rawptr(&s.mvp[0]), 128)
+update :: proc(s: ^State, pipeline: rt.Handle) {
+    if p, ok := &s.resources[pipeline].resource.(Pipeline); ok {
+        hr: d3d12.HRESULT
+        mem.copy(s.mat_ptr[p.frame_index], rawptr(&s.mvp[0]), 128)
 
-    for res in &s.resources {
-        if b, ok := &res.resource.(Buffer); ok {
-            if b.staging_buffer_updated {
-                s.cmdlist->CopyBufferRegion(b.buffer, 0, b.staging_buffer, 0, u64(b.size))
-                b.staging_buffer_updated = false
-            }
-        } 
+        for res in &s.resources {
+            if b, ok := &res.resource.(Buffer); ok {
+                if b.staging_buffer_updated {
+                    s.cmdlist->CopyBufferRegion(b.buffer, 0, b.staging_buffer, 0, u64(b.size))
+                    b.staging_buffer_updated = false
+                }
+            } 
+        }
     }
 }
 
