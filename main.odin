@@ -36,7 +36,6 @@ main :: proc() {
     sdl2.GetWindowWMInfo(window, &window_info)
     window_handle := dxgi.HWND(window_info.info.win.window)
     renderer_state := render_d3d12.create(wx, wy, window_handle)
-    renderer_state.mvp = 1
     ri_state: rc.State
     fence: render_types.Handle
     vertex_buffer: render_types.Handle
@@ -112,7 +111,7 @@ main :: proc() {
     camera_pitch: f32 = 0
 
     main_loop: for {
-        render_d3d12.new_frame(&renderer_state)
+        render_d3d12.new_frame(&renderer_state, pipeline)
 
         camera_rot_x := lin.matrix4_rotate(camera_pitch, lin.Vector3f32{1, 0, 0})
         camera_rot_y := lin.matrix4_rotate(camera_yaw, lin.Vector3f32{0, 1, 0})
@@ -172,7 +171,7 @@ main :: proc() {
             0, 0, far/(far - near), (-far * near)/(far - near),
             0, 0, 1.0, 0,
         }, view)
-        render_d3d12.set_mvp(&renderer_state, &mvp)
+        render_d3d12.set_mvp(&renderer_state, pipeline, &mvp)
 
         render_d3d12.update(&renderer_state, pipeline)
 
@@ -183,6 +182,7 @@ main :: proc() {
         })
         append(&cmdlist, rc.SetShader {
             handle = shader,
+            pipeline = pipeline,
         })
         append(&cmdlist, rc.SetScissor {
             rect = { w = f32(wx), h = f32(wy), },

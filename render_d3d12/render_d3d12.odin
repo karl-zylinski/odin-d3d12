@@ -36,6 +36,13 @@ Pipeline :: struct {
     swapchain: ^dxgi.ISwapChain3,
     queue: ^d3d12.ICommandQueue,
     frame_index: u32,
+    targets: [NUM_RENDERTARGETS]^d3d12.IResource,
+    rtv_descriptor_heap: ^d3d12.IDescriptorHeap,
+    cbv_descriptor_heaps: [NUM_RENDERTARGETS]^d3d12.IDescriptorHeap,
+    mvp: hlsl.float4x4,
+    mat: [NUM_RENDERTARGETS]^d3d12.IResource,
+    mat_ptr: [NUM_RENDERTARGETS]^hlsl.float4x4,
+    command_allocator: ^d3d12.ICommandAllocator,
 }
 
 None :: struct {
@@ -43,6 +50,7 @@ None :: struct {
 
 Shader :: struct {
     pipeline_state: ^d3d12.IPipelineState,
+    root_signature: ^d3d12.IRootSignature,
 }
 
 ResourceData :: union {
@@ -64,15 +72,10 @@ State :: struct {
     adapter: ^dxgi.IAdapter1,
     device: ^d3d12.IDevice,
     info_queue: ^d3d12.IInfoQueue,
-    rtv_descriptor_heap: ^d3d12.IDescriptorHeap,
-    targets: [NUM_RENDERTARGETS]^d3d12.IResource,
-    cbv_descriptor_heaps: [NUM_RENDERTARGETS]^d3d12.IDescriptorHeap,
-    mvp: hlsl.float4x4,
-    mat: [NUM_RENDERTARGETS]^d3d12.IResource,
-    mat_ptr: [NUM_RENDERTARGETS]^hlsl.float4x4,
-    command_allocator: ^d3d12.ICommandAllocator,
-    root_signature: ^d3d12.IRootSignature,
+    
+    // TODO remove me, use some sort of pool?
     cmdlist: ^d3d12.IGraphicsCommandList,
+
     wx: i32,
     wy: i32,
 
@@ -155,7 +158,13 @@ submit_command_list :: proc(s: ^State, commands: rc.CommandList) {
             case rc.Noop: {}
             case rc.SetShader: {
                 if shader, ok := &s.resources[c.handle].resource.(Shader); ok {
-                    s.cmdlist->SetPipelineState(shader.pipeline_state)
+                    if p, ok := &s.resources[c.pipeline].resource.(Pipeline); ok {
+                        s.cmdlist->SetGraphicsRootSignature(shader.root_signature)
+                        table_handle: d3d12.GPU_DESCRIPTOR_HANDLE
+                        p.cbv_descriptor_heaps[p.frame_index]->GetGPUDescriptorHandleForHeapStart(&table_handle)
+                        s.cmdlist->SetGraphicsRootDescriptorTable(0, table_handle);
+                        s.cmdlist->SetPipelineState(shader.pipeline_state)
+                    }
                 }
             }
             case rc.CreatePipeline: {
@@ -200,7 +209,7 @@ submit_command_list :: proc(s: ^State, commands: rc.CommandList) {
                         Flags = .NONE,
                     };
 
-                    hr = s.device->CreateDescriptorHeap(&desc, d3d12.IDescriptorHeap_UUID, (^rawptr)(&s.rtv_descriptor_heap))
+                    hr = s.device->CreateDescriptorHeap(&desc, d3d12.IDescriptorHeap_UUID, (^rawptr)(&p.rtv_descriptor_heap))
                     check(hr, s.info_queue, "Failed creating descriptor heap")
                 }
 
@@ -210,12 +219,12 @@ submit_command_list :: proc(s: ^State, commands: rc.CommandList) {
                     rtv_descriptor_size: u32 = s.device->GetDescriptorHandleIncrementSize(.RTV)
 
                     rtv_descriptor_handle: d3d12.CPU_DESCRIPTOR_HANDLE
-                    s.rtv_descriptor_heap->GetCPUDescriptorHandleForHeapStart(&rtv_descriptor_handle)
+                    p.rtv_descriptor_heap->GetCPUDescriptorHandleForHeapStart(&rtv_descriptor_handle)
 
                     for i :u32= 0; i < NUM_RENDERTARGETS; i += 1 {
-                        hr = p.swapchain->GetBuffer(i, d3d12.IResource_UUID, (^rawptr)(&s.targets[i]))
+                        hr = p.swapchain->GetBuffer(i, d3d12.IResource_UUID, (^rawptr)(&p.targets[i]))
                         check(hr, s.info_queue, "Failed getting render target")
-                        s.device->CreateRenderTargetView(s.targets[i], nil, rtv_descriptor_handle);
+                        s.device->CreateRenderTargetView(p.targets[i], nil, rtv_descriptor_handle);
                         rtv_descriptor_handle.ptr += uint(rtv_descriptor_size);
                     }
                 }
@@ -228,12 +237,12 @@ submit_command_list :: proc(s: ^State, commands: rc.CommandList) {
                     };
 
                     for i :u32= 0; i < NUM_RENDERTARGETS; i += 1 {
-                        hr = s.device->CreateDescriptorHeap(&desc, d3d12.IDescriptorHeap_UUID, (^rawptr)(&s.cbv_descriptor_heaps[i]))
+                        hr = s.device->CreateDescriptorHeap(&desc, d3d12.IDescriptorHeap_UUID, (^rawptr)(&p.cbv_descriptor_heaps[i]))
                         check(hr, s.info_queue, "Failed creating cbv descriptor heap")
                     }
                 }
 
-                s.mvp = 1
+                p.mvp = 1
 
                 {
                     heap_props := d3d12.HEAP_PROPERTIES {
@@ -251,29 +260,55 @@ submit_command_list :: proc(s: ^State, commands: rc.CommandList) {
                     }
 
                     for i := 0; i < NUM_RENDERTARGETS; i += 1 {
-                        hr = s.device->CreateCommittedResource(&heap_props, .NONE, &resource_desc, .GENERIC_READ, nil, d3d12.IResource_UUID, (^rawptr)(&s.mat[i]))
+                        hr = s.device->CreateCommittedResource(&heap_props, .NONE, &resource_desc, .GENERIC_READ, nil, d3d12.IResource_UUID, (^rawptr)(&p.mat[i]))
                         check(hr, s.info_queue, "Failed creating commited resource")
 
                         r: d3d12.RANGE = {}
-                        s.mat[i]->Map(0, &r, (^rawptr)(&s.mat_ptr[i]))
-                        mem.copy(s.mat_ptr[i], rawptr(&s.mvp[0]), 128)
+                        p.mat[i]->Map(0, &r, (^rawptr)(&p.mat_ptr[i]))
+                        mem.copy(p.mat_ptr[i], rawptr(&p.mvp[0]), 128)
 
                         cbv_desc := d3d12.CONSTANT_BUFFER_VIEW_DESC {
                             SizeInBytes = 256,
-                            BufferLocation = s.mat[i]->GetGPUVirtualAddress(),
+                            BufferLocation = p.mat[i]->GetGPUVirtualAddress(),
                         }
 
                         mat_handle: d3d12.CPU_DESCRIPTOR_HANDLE
-                        s.cbv_descriptor_heaps[i]->GetCPUDescriptorHandleForHeapStart(&mat_handle)
+                        p.cbv_descriptor_heaps[i]->GetCPUDescriptorHandleForHeapStart(&mat_handle)
                         s.device->CreateConstantBufferView(&cbv_desc, mat_handle)
                     }
                 }
 
                 // The command allocator is used to create the commandlist that is used to tell the GPU what to draw
-                hr = s.device->CreateCommandAllocator(.DIRECT, d3d12.ICommandAllocator_UUID, (^rawptr)(&s.command_allocator))
+                hr = s.device->CreateCommandAllocator(.DIRECT, d3d12.ICommandAllocator_UUID, (^rawptr)(&p.command_allocator))
                 check(hr, s.info_queue, "Failed creating command allocator")
 
-                /* 
+                // Create the commandlist that is reused further down.
+                hr = s.device->CreateCommandList(0, .DIRECT, p.command_allocator, nil, d3d12.ICommandList_UUID, (^rawptr)(&s.cmdlist))
+                check(hr, s.info_queue, "Failed to create command list")
+                hr = s.cmdlist->Close()
+                check(hr, s.info_queue, "Failed to close command list")
+
+                set_resource(s, c.handle, p)
+            }
+            case rc.CreateShader: {
+                rd: Shader
+
+                compile_flags: u32 = 0
+                when ODIN_DEBUG {
+                    compile_flags |= u32(d3d_compiler.D3DCOMPILE.DEBUG)
+                    compile_flags |= u32(d3d_compiler.D3DCOMPILE.SKIP_OPTIMIZATION)
+                }
+
+                vs: ^d3d12.IBlob = nil
+                ps: ^d3d12.IBlob = nil
+
+                hr = d3d_compiler.Compile(c.code, uint(c.size), nil, nil, nil, "VSMain", "vs_4_0", compile_flags, 0, &vs, nil)
+                check(hr, s.info_queue, "Failed to compile vertex shader")
+
+                hr = d3d_compiler.Compile(c.code, uint(c.size), nil, nil, nil, "PSMain", "ps_4_0", compile_flags, 0, &ps, nil)
+                check(hr, s.info_queue, "Failed to compile pixel shader")
+
+                  /* 
                 From https://docs.microsoft.com/en-us/windows/win32/direct3d12/root-signatures-overview:
                 
                     A root signature is configured by the app and links command lists to the resources the shaders require.
@@ -327,35 +362,10 @@ submit_command_list :: proc(s: ^State, commands: rc.CommandList) {
                     serialized_desc: ^d3d12.IBlob
                     hr = d3d12.SerializeVersionedRootSignature(&vdesc, &serialized_desc, nil)
                     check(hr, s.info_queue, "Failed to serialize root signature")
-                    hr = s.device->CreateRootSignature(0, serialized_desc->GetBufferPointer(), serialized_desc->GetBufferSize(), d3d12.IRootSignature_UUID, (^rawptr)(&s.root_signature))
+                    hr = s.device->CreateRootSignature(0, serialized_desc->GetBufferPointer(), serialized_desc->GetBufferSize(), d3d12.IRootSignature_UUID, (^rawptr)(&rd.root_signature))
                     check(hr, s.info_queue, "Failed creating root signature")
                     serialized_desc->Release()
                 }
-
-
-                // Create the commandlist that is reused further down.
-                hr = s.device->CreateCommandList(0, .DIRECT, s.command_allocator, nil, d3d12.ICommandList_UUID, (^rawptr)(&s.cmdlist))
-                check(hr, s.info_queue, "Failed to create command list")
-                hr = s.cmdlist->Close()
-                check(hr, s.info_queue, "Failed to close command list")
-
-                set_resource(s, c.handle, p)
-            }
-            case rc.CreateShader: {
-                compile_flags: u32 = 0
-                when ODIN_DEBUG {
-                    compile_flags |= u32(d3d_compiler.D3DCOMPILE.DEBUG)
-                    compile_flags |= u32(d3d_compiler.D3DCOMPILE.SKIP_OPTIMIZATION)
-                }
-
-                vs: ^d3d12.IBlob = nil
-                ps: ^d3d12.IBlob = nil
-
-                hr = d3d_compiler.Compile(c.code, uint(c.size), nil, nil, nil, "VSMain", "vs_4_0", compile_flags, 0, &vs, nil)
-                check(hr, s.info_queue, "Failed to compile vertex shader")
-
-                hr = d3d_compiler.Compile(c.code, uint(c.size), nil, nil, nil, "PSMain", "ps_4_0", compile_flags, 0, &ps, nil)
-                check(hr, s.info_queue, "Failed to compile pixel shader")
 
                 // This layout matches the vertices data defined further down
                 vertex_format: []d3d12.INPUT_ELEMENT_DESC = {
@@ -389,7 +399,7 @@ submit_command_list :: proc(s: ^State, commands: rc.CommandList) {
                 };
 
                 pipeline_state_desc := d3d12.GRAPHICS_PIPELINE_STATE_DESC {
-                    pRootSignature = s.root_signature,
+                    pRootSignature = rd.root_signature,
                     VS = {
                         pShaderBytecode = vs->GetBufferPointer(),
                         BytecodeLength = vs->GetBufferSize(),
@@ -435,8 +445,6 @@ submit_command_list :: proc(s: ^State, commands: rc.CommandList) {
                         Quality = 0,
                     },
                 };
-                
-                rd: Shader
 
                 hr = s.device->CreateGraphicsPipelineState(&pipeline_state_desc, d3d12.IPipelineState_UUID, (^rawptr)(&rd.pipeline_state))
                 check(hr, s.info_queue, "Pipeline creation failed")
@@ -540,11 +548,7 @@ submit_command_list :: proc(s: ^State, commands: rc.CommandList) {
 
             case rc.SetPipeline:
                 if p, ok := &s.resources[c.handle].resource.(Pipeline); ok {
-                    s.cmdlist->SetGraphicsRootSignature(s.root_signature)
-                    s.cmdlist->SetDescriptorHeaps(1, &s.cbv_descriptor_heaps[p.frame_index]);
-                    table_handle: d3d12.GPU_DESCRIPTOR_HANDLE
-                    s.cbv_descriptor_heaps[p.frame_index]->GetGPUDescriptorHandleForHeapStart(&table_handle)
-                    s.cmdlist->SetGraphicsRootDescriptorTable(0, table_handle);
+                    s.cmdlist->SetDescriptorHeaps(1, &p.cbv_descriptor_heaps[p.frame_index]);
                 }
 
             case rc.SetScissor:
@@ -566,7 +570,7 @@ submit_command_list :: proc(s: ^State, commands: rc.CommandList) {
             case rc.SetRenderTarget:
                 if p, ok := &s.resources[c.render_target.pipeline].resource.(Pipeline); ok {
                     rtv_handle: d3d12.CPU_DESCRIPTOR_HANDLE
-                    s.rtv_descriptor_heap->GetCPUDescriptorHandleForHeapStart(&rtv_handle)
+                    p.rtv_descriptor_heap->GetCPUDescriptorHandleForHeapStart(&rtv_handle)
 
                     if (p.frame_index > 0) {
                         size := s.device->GetDescriptorHandleIncrementSize(.RTV)
@@ -579,7 +583,7 @@ submit_command_list :: proc(s: ^State, commands: rc.CommandList) {
             case rc.ClearRenderTarget: 
                 if p, ok := &s.resources[c.render_target.pipeline].resource.(Pipeline); ok {
                     rtv_handle: d3d12.CPU_DESCRIPTOR_HANDLE
-                    s.rtv_descriptor_heap->GetCPUDescriptorHandleForHeapStart(&rtv_handle)
+                    p.rtv_descriptor_heap->GetCPUDescriptorHandleForHeapStart(&rtv_handle)
 
                     if (p.frame_index > 0) {
                         size := s.device->GetDescriptorHandleIncrementSize(.RTV)
@@ -608,7 +612,7 @@ submit_command_list :: proc(s: ^State, commands: rc.CommandList) {
                     }
 
                     b.Transition = {
-                        pResource = s.targets[p.frame_index],
+                        pResource = p.targets[p.frame_index],
                         StateBefore = ri_to_d3d_state(c.before),
                         StateAfter = ri_to_d3d_state(c.after),
                         Subresource = d3d12.RESOURCE_BARRIER_ALL_SUBRESOURCES,
@@ -656,13 +660,15 @@ submit_command_list :: proc(s: ^State, commands: rc.CommandList) {
     }
 }
 
-new_frame :: proc(s: ^State) {
-    hr: d3d12.HRESULT
-    hr = s.command_allocator->Reset()
-    check(hr, s.info_queue, "Failed resetting command allocator")
+new_frame :: proc(s: ^State, pipeline: rt.Handle) {
+    if p, ok := &s.resources[pipeline].resource.(Pipeline); ok {
+        hr: d3d12.HRESULT
+        hr = p.command_allocator->Reset()
+        check(hr, s.info_queue, "Failed resetting command allocator")
 
-    hr = s.cmdlist->Reset(s.command_allocator, nil)
-    check(hr, s.info_queue, "Failed to reset command list")
+        hr = s.cmdlist->Reset(p.command_allocator, nil)
+        check(hr, s.info_queue, "Failed to reset command list")
+    }
 }
 
 ri_to_d3d_state :: proc(ri_state: rc.ResourceState) -> d3d12.RESOURCE_STATES {
@@ -676,7 +682,7 @@ ri_to_d3d_state :: proc(ri_state: rc.ResourceState) -> d3d12.RESOURCE_STATES {
 update :: proc(s: ^State, pipeline: rt.Handle) {
     if p, ok := &s.resources[pipeline].resource.(Pipeline); ok {
         hr: d3d12.HRESULT
-        mem.copy(s.mat_ptr[p.frame_index], rawptr(&s.mvp[0]), 128)
+        mem.copy(p.mat_ptr[p.frame_index], rawptr(&p.mvp[0]), 128)
 
         for res in &s.resources {
             if b, ok := &res.resource.(Buffer); ok {
@@ -689,12 +695,18 @@ update :: proc(s: ^State, pipeline: rt.Handle) {
     }
 }
 
-set_mvp :: proc(s: ^State, mvp: ^hlsl.float4x4) {
-    s.mvp = mvp^
+set_mvp :: proc(s: ^State, pipeline: rt.Handle, mvp: ^hlsl.float4x4) {
+    if p, ok := &s.resources[pipeline].resource.(Pipeline); ok {
+        p.mvp = mvp^
+    }
 }
 
-mvp :: proc(s: ^State) -> hlsl.float4x4 {
-    return s.mvp
+mvp :: proc(s: ^State, pipeline: rt.Handle) -> hlsl.float4x4 {
+    if p, ok := &s.resources[pipeline].resource.(Pipeline); ok {
+        return p.mvp
+    }
+
+    return {}
 }
 
 check :: proc(res: d3d12.HRESULT, iq: ^d3d12.IInfoQueue, message: string) {

@@ -99,12 +99,14 @@ CreatePipeline :: struct {
 
 CreateShader :: struct {
     handle: Handle,
+    pipeline: Handle,
     code: rawptr,
     size: int,
 }
 
 SetShader :: struct {
     handle: Handle,
+    pipeline: Handle,
 }
 
 Command :: union {
