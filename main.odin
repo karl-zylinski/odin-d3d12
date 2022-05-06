@@ -6,6 +6,7 @@ import "core:strconv"
 import "core:strings"
 import "core:sys/windows"
 import "core:os"
+import "core:runtime"
 import "vendor:sdl2"
 import "vendor:directx/dxgi"
 import "render_d3d12"
@@ -14,15 +15,16 @@ import "render_types"
 import linh "core:math/linalg/hlsl"
 import lin "core:math/linalg"
 
-load_teapot :: proc() -> ([dynamic]f32, [dynamic]u32)  {
+load_teapot :: proc() -> ([dynamic]f32, [dynamic]u32, [dynamic]f32)  {
     f, err := os.open("teapot.obj")
     defer os.close(f)
     fs, _ := os.file_size(f)
     teapot_bytes := make([]byte, fs, context.temp_allocator)
     os.read(f, teapot_bytes)
     teapot := strings.string_from_ptr(&teapot_bytes[0], int(fs))
-    out: [dynamic]f32
-    indices_out: [dynamic]u32
+    out := make([dynamic]f32, context.temp_allocator)
+    normals_out := make([dynamic]f32, context.temp_allocator)
+    indices_out := make([dynamic]u32, context.temp_allocator)
 
     parse_comment :: proc(teapot: string, i_in: int) -> int {
         i := i_in
@@ -60,7 +62,7 @@ load_teapot :: proc() -> ([dynamic]f32, [dynamic]u32)  {
     }
 
     parse_vertex :: proc(teapot: string, i_in: int, out: ^[dynamic]f32) -> int {
-        i := skip_whitespace(teapot, i_in + 1)
+        i := skip_whitespace(teapot, i_in)
         n0, n1, n2: f32
         i, n0 = parse_number(teapot, i)
         i = skip_whitespace(teapot, i)
@@ -108,17 +110,24 @@ load_teapot :: proc() -> ([dynamic]f32, [dynamic]u32)  {
     for i := 0; i < len(teapot); i += 1 {
         switch teapot[i] {
             case '#': i = parse_comment(teapot, i)
-            case 'v': if teapot[i + 1] != 'n' {
-                i = parse_vertex(teapot, i, &out)
+            case 'v': if teapot[i + 1] == ' ' {
+                i = parse_vertex(teapot, i + 1, &out)
+            } else if teapot[i + 1] == 'n' {
+                i = parse_vertex(teapot, i + 2, &normals_out)
             }
             case 'f': i = parse_face(teapot, i, &indices_out)
         }
     }
 
-    return out, indices_out
+    return out, indices_out, normals_out
 }
 
 main :: proc() {
+    tracking_allocator: mem.Tracking_Allocator
+    mem.tracking_allocator_init(&tracking_allocator, runtime.default_allocator())
+    allocator := mem.tracking_allocator(&tracking_allocator)
+    context.allocator = allocator
+
     // Init SDL and create window
     if err := sdl2.Init({.VIDEO}); err != 0 {
         fmt.eprintln(err)
@@ -140,7 +149,22 @@ main :: proc() {
     sdl2.SetRelativeMouseMode(true)
     defer sdl2.DestroyWindow(window)
 
-    vertices, indices := load_teapot()
+    vertices, indices, normals := load_teapot()
+
+    vertex_data := make([]f32, len(vertices) * 2, context.temp_allocator)
+    vdi := 0
+    for v, i in vertices {
+        vertex_data[vdi] = vertices[i]
+        vdi += 1
+        if (i + 1) % 3 == 0 && i != 0 {
+            vertex_data[vdi] = normals[i - 2]
+            vertex_data[vdi + 1] = normals[i - 1]
+            vertex_data[vdi + 2] = normals[i]
+            vdi += 3
+        }
+    }
+
+   // fmt.println(vertex_data)
 
     // Get the window handle from SDL
     window_info: sdl2.SysWMinfo
@@ -154,7 +178,7 @@ main :: proc() {
     pipeline: render_types.Handle
     shader: render_types.Handle
 
-    vertex_buffer_size := len(vertices) * size_of(vertices[0])
+    vertex_buffer_size := len(vertex_data) * size_of(vertex_data[0])
     index_buffer_size := len(indices) * size_of(indices[0])
 
     {
@@ -166,7 +190,7 @@ main :: proc() {
         shader_code := make([]byte, fs, context.temp_allocator)
         os.read(f, shader_code)
         shader = rc.create_shader(&ri_state, &cmdlist, rawptr(&shader_code[0]), int(fs))
-        vertex_buffer = rc.create_buffer(&ri_state, &cmdlist, rc.VertexBufferDesc { stride = 12 }, rawptr(&vertices[0]), vertex_buffer_size, .Dynamic)
+        vertex_buffer = rc.create_buffer(&ri_state, &cmdlist, rc.VertexBufferDesc { stride = 24 }, rawptr(&vertex_data[0]), vertex_buffer_size, .Dynamic)
         index_buffer = rc.create_buffer(&ri_state, &cmdlist, rc.IndexBufferDesc { stride = 4 }, rawptr(&indices[0]), index_buffer_size, .Dynamic)
         defer delete(cmdlist)
         fence = rc.create_fence(&ri_state, &cmdlist)
@@ -307,4 +331,12 @@ main :: proc() {
         append(&cmdlist, rc.WaitForFence { fence = fence, pipeline = pipeline, })
         render_d3d12.submit_command_list(&renderer_state, cmdlist)
     }
+
+    render_d3d12.destroy(&renderer_state)
+
+    for key, value in tracking_allocator.allocation_map {
+        fmt.printf("%v: Leaked %v bytes\n", value.location, value.size)
+    }
+
+    mem.tracking_allocator_destroy(&tracking_allocator);
 }

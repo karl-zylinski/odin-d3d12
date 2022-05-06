@@ -138,6 +138,16 @@ create :: proc(wx: i32, wy: i32, window_handle: dxgi.HWND) -> (s: State) {
     return s
 }
 
+destroy :: proc(s: ^State) {
+    for res in s.resources {
+        if res.resource != nil {
+            fmt.printf("Renderer resource leak: %v\n", res)
+        }
+    }
+
+    delete(s.resources)
+}
+
 set_resource :: proc(s: ^State, handle: rt.Handle, res: ResourceData) {
     index := int(handle)
 
@@ -424,12 +434,12 @@ submit_command_list :: proc(s: ^State, commands: rc.CommandList) {
                         Format = .R32G32B32_FLOAT, 
                         InputSlotClass = .PER_VERTEX_DATA, 
                     },
-                 /*   {   
-                        SemanticName = "COLOR", 
-                        Format = .R32G32B32A32_FLOAT, 
+                    {   
+                        SemanticName = "NORMAL", 
+                        Format = .R32G32B32_FLOAT, 
                         AlignedByteOffset = size_of(f32) * 3, 
                         InputSlotClass = .PER_VERTEX_DATA, 
-                    },*/
+                    },
                 }
 
                 default_blend_state := d3d12.RENDER_TARGET_BLEND_DESC {
