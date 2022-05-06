@@ -37,7 +37,9 @@ Pipeline :: struct {
     swapchain: ^dxgi.ISwapChain3,
     queue: ^d3d12.ICommandQueue,
     frame_index: u32,
+    depth: ^d3d12.IResource,
     targets: [NUM_RENDERTARGETS]^d3d12.IResource,
+    dsv_descriptor_heap: ^d3d12.IDescriptorHeap,
     rtv_descriptor_heap: ^d3d12.IDescriptorHeap,
     cbv_descriptor_heaps: [NUM_RENDERTARGETS]^d3d12.IDescriptorHeap,
     mvp: hlsl.float4x4,
@@ -111,13 +113,7 @@ create :: proc(wx: i32, wy: i32, window_handle: dxgi.HWND) -> (s: State) {
     error_not_found := dxgi.HRESULT(-142213123)
 
     for i: u32 = 0; s.factory->EnumAdapters1(i, &s.adapter) != error_not_found; i += 1 {
-        desc: dxgi.ADAPTER_DESC1
-        s.adapter->GetDesc1(&desc)
-        if desc.Flags & u32(dxgi.ADAPTER_FLAG.SOFTWARE) != 0 {
-            continue
-        }
-
-        if d3d12.CreateDevice((^dxgi.IUnknown)(s.adapter), ._12_0, dxgi.IDevice_UUID, nil) >= 0 {
+        if d3d12.CreateDevice((^dxgi.IUnknown)(s.adapter), ._12_0, d3d12.IDevice_UUID, nil) == 1 {
             break
         } else {
             fmt.println("Failed to create device")
@@ -136,7 +132,7 @@ create :: proc(wx: i32, wy: i32, window_handle: dxgi.HWND) -> (s: State) {
  
     when ODIN_DEBUG {
         hr = s.device->QueryInterface(d3d12.IInfoQueue_UUID, (^rawptr)(&s.info_queue))
-        check(hr, s.info_queue, "Failed getting info queue")
+        //check(hr, s.info_queue, "Failed getting info queue")
     }
 
     return s
@@ -277,6 +273,59 @@ submit_command_list :: proc(s: ^State, commands: rc.CommandList) {
                         p.cbv_descriptor_heaps[i]->GetCPUDescriptorHandleForHeapStart(&mat_handle)
                         s.device->CreateConstantBufferView(&cbv_desc, mat_handle)
                     }
+                }
+
+                     // Descripors describe the GPU data and are allocated from a Descriptor Heap
+                {
+                    desc := d3d12.DESCRIPTOR_HEAP_DESC {
+                        NumDescriptors = 1,
+                        Type = .DSV,
+                    };
+
+                    hr = s.device->CreateDescriptorHeap(&desc, d3d12.IDescriptorHeap_UUID, (^rawptr)(&p.dsv_descriptor_heap))
+                    check(hr, s.info_queue, "Failed creating DSV descriptor heap")
+                }
+
+                {
+                    heap_props := d3d12.HEAP_PROPERTIES {
+                        Type = .DEFAULT,
+                    }
+
+                    ds_desc := d3d12.RESOURCE_DESC {
+                        Dimension = .TEXTURE2D,
+                        Width = u64(s.wx),
+                        Height = u32(s.wy),
+                        DepthOrArraySize = 1,
+                        MipLevels = 1,
+                        Format = .D32_FLOAT,
+                        SampleDesc = { Count = 1, },
+                        Flags = .ALLOW_DEPTH_STENCIL,
+                    }
+
+                    clear_value := d3d12.CLEAR_VALUE {
+                        Format = .D32_FLOAT,
+                    }
+
+                    clear_value.DepthStencil = { Depth = 1.0, }
+
+                    s.device->CreateCommittedResource(
+                        &heap_props,
+                        .NONE,
+                        &ds_desc,
+                        .DEPTH_WRITE,
+                        &clear_value,
+                        d3d12.IResource_UUID,
+                        (^rawptr)(&p.depth),
+                    );
+
+                    dsv_desc := d3d12.DEPTH_STENCIL_VIEW_DESC {
+                        Format = .D32_FLOAT,
+                        ViewDimension = .TEXTURE2D,
+                    }
+
+                    heap_handle_dsv: d3d12.CPU_DESCRIPTOR_HANDLE
+                    p.dsv_descriptor_heap->GetCPUDescriptorHandleForHeapStart(&heap_handle_dsv)
+                    s.device->CreateDepthStencilView(p.depth, &dsv_desc, heap_handle_dsv);
                 }
 
                 // The command allocator is used to create the commandlist that is used to tell the GPU what to draw
@@ -430,7 +479,9 @@ submit_command_list :: proc(s: ^State, commands: rc.CommandList) {
                         ConservativeRaster = .OFF,
                     },
                     DepthStencilState = {
-                        DepthEnable = false,
+                        DepthEnable = true,
+                        DepthWriteMask = .ALL,
+                        DepthFunc = .LESS,
                         StencilEnable = false,
                     },
                     InputLayout = {
@@ -440,7 +491,7 @@ submit_command_list :: proc(s: ^State, commands: rc.CommandList) {
                     PrimitiveTopologyType = .TRIANGLE,
                     NumRenderTargets = 1,
                     RTVFormats = { 0 = .R8G8B8A8_UNORM, 1..7 = .UNKNOWN },
-                    DSVFormat = .UNKNOWN,
+                    DSVFormat = .D32_FLOAT,
                     SampleDesc = {
                         Count = 1,
                         Quality = 0,
@@ -573,6 +624,8 @@ submit_command_list :: proc(s: ^State, commands: rc.CommandList) {
                     TopLeftY = c.rect.y,
                     Width = c.rect.w,
                     Height = c.rect.h,
+                    MinDepth = 0,
+                    MaxDepth = 1,
                 })
 
             case rc.SetRenderTarget:
@@ -585,7 +638,9 @@ submit_command_list :: proc(s: ^State, commands: rc.CommandList) {
                         rtv_handle.ptr += uint(p.frame_index * size)
                     }
 
-                    s.cmdlist->OMSetRenderTargets(1, &rtv_handle, false, nil)
+                    dsv_handle: d3d12.CPU_DESCRIPTOR_HANDLE
+                    p.dsv_descriptor_heap->GetCPUDescriptorHandleForHeapStart(&dsv_handle);
+                    s.cmdlist->OMSetRenderTargets(1, &rtv_handle, false, &dsv_handle)
                 }
 
             case rc.ClearRenderTarget: 
@@ -600,6 +655,9 @@ submit_command_list :: proc(s: ^State, commands: rc.CommandList) {
 
                     cc := c.clear_color
                     s.cmdlist->ClearRenderTargetView(rtv_handle, (^[4]f32)(&cc), 0, nil)
+                    dsv_handle: d3d12.CPU_DESCRIPTOR_HANDLE
+                    p.dsv_descriptor_heap->GetCPUDescriptorHandleForHeapStart(&dsv_handle);
+                    s.cmdlist->ClearDepthStencilView(dsv_handle, .DEPTH, 1.0, 0, 0, nil);
                 }
 
             case rc.DrawCall:

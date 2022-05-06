@@ -115,8 +115,6 @@ load_teapot :: proc() -> ([dynamic]f32, [dynamic]u32)  {
         }
     }
 
-    fmt.println(len(out)/3)
-
     return out, indices_out
 }
 
