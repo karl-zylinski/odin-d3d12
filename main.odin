@@ -14,6 +14,7 @@ import rc "render_commands"
 import "render_types"
 import linh "core:math/linalg/hlsl"
 import lin "core:math/linalg"
+import "shader_system"
 
 load_teapot :: proc() -> ([dynamic]f32, [dynamic]u32, [dynamic]f32)  {
     f, err := os.open("teapot.obj")
@@ -183,16 +184,12 @@ main :: proc() {
 
     {
         cmdlist: rc.CommandList
+        defer delete(cmdlist)
         pipeline = rc.create_pipeline(&ri_state, &cmdlist, f32(wx), f32(wy), render_types.WindowHandle(uintptr(window_handle)))
-        f, err := os.open("shader.shader")
-        defer os.close(f)
-        fs, _ := os.file_size(f)
-        shader_code := make([]byte, fs, context.temp_allocator)
-        os.read(f, shader_code)
-        shader = rc.create_shader(&ri_state, &cmdlist, rawptr(&shader_code[0]), int(fs))
+        shader_def := shader_system.load_shader("shader.shader")
+        shader = rc.create_shader(&ri_state, &cmdlist, shader_def)
         vertex_buffer = rc.create_buffer(&ri_state, &cmdlist, rc.VertexBufferDesc { stride = 24 }, rawptr(&vertex_data[0]), vertex_buffer_size, .Dynamic)
         index_buffer = rc.create_buffer(&ri_state, &cmdlist, rc.IndexBufferDesc { stride = 4 }, rawptr(&indices[0]), index_buffer_size, .Dynamic)
-        defer delete(cmdlist)
         fence = rc.create_fence(&ri_state, &cmdlist)
         render_d3d12.submit_command_list(&renderer_state, cmdlist)
     }
@@ -293,8 +290,8 @@ main :: proc() {
             0, 0, far/(far - near), (-far * near)/(far - near),
             0, 0, 1.0, 0,
         }, view)
-        render_d3d12.set_mvp(&renderer_state, pipeline, &mvp)
 
+        render_d3d12.set_mvp(&renderer_state, pipeline, &mvp)
         render_d3d12.update(&renderer_state, pipeline)
 
         cmdlist: rc.CommandList
@@ -332,7 +329,19 @@ main :: proc() {
         render_d3d12.submit_command_list(&renderer_state, cmdlist)
     }
 
+    {
+        cmdlist: rc.CommandList
+        defer delete(cmdlist)
+        rc.destroy_resource(&ri_state, &cmdlist, shader)
+        rc.destroy_resource(&ri_state, &cmdlist, fence)
+        rc.destroy_resource(&ri_state, &cmdlist, vertex_buffer)
+        rc.destroy_resource(&ri_state, &cmdlist, index_buffer)
+        rc.destroy_resource(&ri_state, &cmdlist, pipeline)
+        render_d3d12.submit_command_list(&renderer_state, cmdlist)
+    }
+    
     render_d3d12.destroy(&renderer_state)
+    rc.destroy_state(&ri_state)
 
     for key, value in tracking_allocator.allocation_map {
         fmt.printf("%v: Leaked %v bytes\n", value.location, value.size)

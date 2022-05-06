@@ -1,6 +1,4 @@
-cbuffer matrices : register(b0) {
-    float4x4 mvp;
-};
+#cbuffer mvp float4x4 dynamic
 
 struct PSInput {
     float4 position : SV_POSITION;

@@ -11,6 +11,7 @@ import "core:sys/windows"
 import "core:os"
 import rc "../render_commands"
 import rt "../render_types"
+import ss "../shader_system"
 
 NUM_RENDERTARGETS :: 2
 
@@ -146,6 +147,62 @@ destroy :: proc(s: ^State) {
     }
 
     delete(s.resources)
+    
+    s.cmdlist->Release()
+
+    if s.info_queue != nil {
+        s.info_queue->Release()
+    }
+
+    if s.debug != nil {
+        s.debug->Release()
+    }
+
+    s.device->Release()
+    s.adapter->Release()
+    s.factory->Release()
+}
+
+destroy_resource :: proc(s: ^State, handle: rt.Handle) {
+    res := &s.resources[handle]
+
+    #partial switch r in res.resource {
+        case Buffer: {
+            if r.buffer != nil {
+                r.buffer->Release()
+            }
+
+            if r.staging_buffer != nil {
+                r.staging_buffer->Release()
+            }
+
+            res^ = Resource{}
+        }
+        case Fence: {
+            r.fence->Release()
+            res^ = Resource{}
+        }
+        case Shader: {
+            r.pipeline_state->Release()
+            r.root_signature->Release()
+            res^ = Resource{}
+        }
+        case Pipeline: {
+            r.mat[0]->Unmap(0, nil)
+            r.mat[1]->Unmap(0, nil)
+            r.swapchain->Release()
+            r.queue->Release()
+            r.depth->Release()
+            r.targets[0]->Release()
+            r.targets[1]->Release()
+            r.dsv_descriptor_heap->Release()
+            r.rtv_descriptor_heap->Release()
+            r.cbv_descriptor_heaps[0]->Release()
+            r.cbv_descriptor_heaps[1]->Release()
+            r.command_allocator->Release()
+            res^ = Resource{}
+        }
+    }
 }
 
 set_resource :: proc(s: ^State, handle: rt.Handle, res: ResourceData) {
@@ -163,6 +220,9 @@ submit_command_list :: proc(s: ^State, commands: rc.CommandList) {
     for command in commands {
         switch c in command {
             case rc.Noop: {}
+            case rc.DestroyResource: {
+                destroy_resource(s, c.handle)
+            }
             case rc.SetShader: {
                 if shader, ok := &s.resources[c.handle].resource.(Shader); ok {
                     if p, ok := &s.resources[c.pipeline].resource.(Pipeline); ok {
@@ -362,10 +422,12 @@ submit_command_list :: proc(s: ^State, commands: rc.CommandList) {
                 vs: ^d3d12.IBlob = nil
                 ps: ^d3d12.IBlob = nil
 
-                hr = d3d_compiler.Compile(c.code, uint(c.size), nil, nil, nil, "VSMain", "vs_4_0", compile_flags, 0, &vs, nil)
+                def := c.shader
+
+                hr = d3d_compiler.Compile(def.code, uint(def.code_size), nil, nil, nil, "VSMain", "vs_4_0", compile_flags, 0, &vs, nil)
                 check(hr, s.info_queue, "Failed to compile vertex shader")
 
-                hr = d3d_compiler.Compile(c.code, uint(c.size), nil, nil, nil, "PSMain", "ps_4_0", compile_flags, 0, &ps, nil)
+                hr = d3d_compiler.Compile(def.code, uint(def.code_size), nil, nil, nil, "PSMain", "ps_4_0", compile_flags, 0, &ps, nil)
                 check(hr, s.info_queue, "Failed to compile pixel shader")
 
                   /* 
@@ -513,7 +575,7 @@ submit_command_list :: proc(s: ^State, commands: rc.CommandList) {
 
                 vs->Release()
                 ps->Release()
-
+                ss.free_shader(&def)
                 set_resource(s, c.handle, rd)
             }
             case rc.CreateFence: {

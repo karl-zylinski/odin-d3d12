@@ -4,6 +4,7 @@ import "core:mem"
 import "../render_types"
 import "core:math/linalg/hlsl"
 import "../zg_math"
+import "../shader_system"
 
 Handle :: render_types.Handle
 
@@ -106,13 +107,16 @@ CreatePipeline :: struct {
 CreateShader :: struct {
     handle: Handle,
     pipeline: Handle,
-    code: rawptr,
-    size: int,
+    shader: shader_system.Shader,
 }
 
 SetShader :: struct {
     handle: Handle,
     pipeline: Handle,
+}
+
+DestroyResource :: struct {
+    handle: Handle,
 }
 
 Command :: union {
@@ -133,13 +137,26 @@ Command :: union {
     CreatePipeline,
     CreateShader,
     SetShader,
+    DestroyResource,
 }
 
 CommandList :: distinct [dynamic]Command
 
 get_handle :: proc(s: ^State) -> Handle {
+    if len(s.freelist) > 0 {
+        return pop(&s.freelist)
+    }
     s.max_handle += 1
     return s.max_handle
+}
+
+destroy_state :: proc(s: ^State) {
+    delete(s.freelist)
+}
+
+destroy_resource :: proc(s: ^State, command_list: ^CommandList, handle: Handle) {
+    append(command_list, DestroyResource { handle = handle })
+    append(&s.freelist, handle)
 }
 
 create_fence :: proc(s: ^State, command_list: ^CommandList) -> Handle {
@@ -190,13 +207,12 @@ create_pipeline :: proc(s: ^State, command_list: ^CommandList, x: f32, y: f32, w
     return h
 }
 
-create_shader :: proc(s: ^State, command_list: ^CommandList, code: rawptr, size: int) -> Handle {
+create_shader :: proc(s: ^State, command_list: ^CommandList, shader: shader_system.Shader) -> Handle {
     h := get_handle(s)
 
     c := CreateShader {
         handle = h,
-        code = code,
-        size = size,
+        shader = shader,
     }
 
     append(command_list, c)
@@ -205,4 +221,5 @@ create_shader :: proc(s: ^State, command_list: ^CommandList, code: rawptr, size:
 
 State :: struct {
     max_handle: Handle,
+    freelist: [dynamic]Handle,
 }
