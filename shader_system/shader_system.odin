@@ -8,6 +8,7 @@ ConstantBufferType :: enum {
     None,
     Float4x4,
     Float4,
+    Float3,
 }
 
 ConstantBuffer :: struct {
@@ -80,6 +81,8 @@ load_shader :: proc(path: string) -> Shader {
             return .Float4x4
         } else if strings.equal_fold(type, "Float4") {
             return .Float4
+        } else if strings.equal_fold(type, "Float3") {
+            return .Float3
         }
 
         fmt.printf("Error: Unknown type %v\n", type)
@@ -159,6 +162,9 @@ load_shader :: proc(path: string) -> Shader {
                     }
                     case .Float4: {
                         strings.write_string(&cbuf_builder, "    float4 ")
+                    }
+                    case .Float3: {
+                        strings.write_string(&cbuf_builder, "    float3 ")
                     }
                 }
 

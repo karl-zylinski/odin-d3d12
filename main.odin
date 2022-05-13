@@ -12,7 +12,8 @@ import "vendor:directx/dxgi"
 import "render_d3d12"
 import rc "render_commands"
 import "render_types"
-import linh "core:math/linalg/hlsl"
+import "core:math"
+import "core:math/linalg/hlsl"
 import lin "core:math/linalg"
 import "shader_system"
 
@@ -194,12 +195,14 @@ main :: proc() {
         render_d3d12.submit_command_list(&renderer_state, cmdlist)
     }
 
-    camera_pos := linh.float3 { 0, 0, -1 }
+    camera_pos := hlsl.float3 { 0, 0, -1 }
     camera_yaw: f32 = 0
     camera_pitch: f32 = 0
     input: [4]bool
+    t :f32= 0
 
     main_loop: for {
+        t += 0.16
         render_d3d12.new_frame(&renderer_state, pipeline)
 
         camera_rot_x := lin.matrix4_rotate(camera_pitch, lin.Vector3f32{1, 0, 0})
@@ -262,41 +265,46 @@ main :: proc() {
         }
 
         if input[0] {
-            camera_pos += lin.mul(camera_rot, linh.float4{0,0,1,1}).xyz * 0.1
+            camera_pos += lin.mul(camera_rot, hlsl.float4{0,0,1,1}).xyz * 0.1
         }
 
         if input[1] {
-            camera_pos -= lin.mul(camera_rot, linh.float4{0,0,1,1}).xyz * 0.1
+            camera_pos -= lin.mul(camera_rot, hlsl.float4{0,0,1,1}).xyz * 0.1
         }
 
         if input[2] {
-            camera_pos -= lin.mul(camera_rot, linh.float4{1,0,0,1}).xyz * 0.1
+            camera_pos -= lin.mul(camera_rot, hlsl.float4{1,0,0,1}).xyz * 0.1
         }
             
         if input[3] {
-            camera_pos += lin.mul(camera_rot, linh.float4{1,0,0,1}).xyz * 0.1
+            camera_pos += lin.mul(camera_rot, hlsl.float4{1,0,0,1}).xyz * 0.1
         }
 
-        camera_trans: linh.float4x4 = 1
+        camera_trans: hlsl.float4x4 = 1
         camera_trans[3].xyz = ([3]f32)(camera_pos)
-        view: linh.float4x4 = linh.inverse(lin.mul(camera_trans, linh.float4x4(camera_rot)))
+        view: hlsl.float4x4 = hlsl.inverse(lin.mul(camera_trans, hlsl.float4x4(camera_rot)))
 
         near: f32 = 0.01
         far: f32 = 100
 
-        mvp := lin.mul(linh.float4x4 {
+        mvp := lin.mul(hlsl.float4x4 {
             1, 0, 0, 0,
             0, 1, 0, 0,
             0, 0, far/(far - near), (-far * near)/(far - near),
             0, 0, 1.0, 0,
         }, view)
 
-        color := linh.float4 {
+        color := hlsl.float4 {
             1, 0, 0, 1,
         }
 
         render_d3d12.set_shader_constant_buffer(&renderer_state, pipeline, shader, render_d3d12.hash("color"), &color)
         render_d3d12.set_shader_constant_buffer(&renderer_state, pipeline, shader, render_d3d12.hash("mvp"), &mvp)
+
+        sun_pos := hlsl.float3 {
+            math.cos(t)*50, 0, math.sin(t)*50,
+        }
+        render_d3d12.set_shader_constant_buffer(&renderer_state, pipeline, shader, render_d3d12.hash("sun_pos"), &sun_pos)
         render_d3d12.update(&renderer_state, pipeline)
 
         cmdlist: rc.CommandList

@@ -233,6 +233,7 @@ constant_buffer_type_size :: proc(t: ss.ConstantBufferType) -> int {
         case .None: return 0
         case .Float4x4: return 64
         case .Float4: return 16
+        case .Float3: return 12
     }
 
     return 0
@@ -453,7 +454,7 @@ submit_command_list :: proc(s: ^State, commands: rc.CommandList) {
                         name = hash(cb.name),
                     }
 
-                    cb_offset += constant_buffer_type_size(cb.type)
+                    cb_offset += max(constant_buffer_type_size(cb.type), 16)
                 }
 
                   /* 
@@ -500,12 +501,6 @@ submit_command_list :: proc(s: ^State, commands: rc.CommandList) {
                         pParameters = &root_parameters[0],
                         Flags = .ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT,
                     }
-
-                    // read https://www.braynzarsoft.net/viewtutorial/q16390-directx-12-constant-buffers-root-descriptor-tables properly
-
-                    //READ
-
-                    // read https://www.gamedev.net/forums/topic/708811-d3d12-best-approach-to-manage-constant-buffer-for-the-frame/5434409/
 
                     serialized_desc: ^d3d12.IBlob
                     hr = d3d12.SerializeVersionedRootSignature(&vdesc, &serialized_desc, nil)
