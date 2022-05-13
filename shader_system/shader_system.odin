@@ -7,6 +7,7 @@ import "core:fmt"
 ConstantBufferType :: enum {
     None,
     Float4x4,
+    Float4,
 }
 
 ConstantBuffer :: struct {
@@ -77,7 +78,11 @@ load_shader :: proc(path: string) -> Shader {
     parse_cbuffer_type :: proc(type: string) -> ConstantBufferType {
         if strings.equal_fold(type, "Float4x4") {
             return .Float4x4
+        } else if strings.equal_fold(type, "Float4") {
+            return .Float4
         }
+
+        fmt.printf("Error: Unknown type %v\n", type)
 
         return .None
     }
@@ -105,7 +110,6 @@ load_shader :: proc(path: string) -> Shader {
         if !first_on_line(code, i) {
             prop: string
             prop, i = get_word(code, i)
-            i = skip_whitespace(code, i)
 
             if strings.equal_fold(prop, "dynamic") {
                 cb.updatable = true
@@ -152,6 +156,9 @@ load_shader :: proc(path: string) -> Shader {
                     case .None: continue
                     case .Float4x4: {
                         strings.write_string(&cbuf_builder, "    float4x4 ")
+                    }
+                    case .Float4: {
+                        strings.write_string(&cbuf_builder, "    float4 ")
                     }
                 }
 

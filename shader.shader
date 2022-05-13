@@ -1,3 +1,4 @@
+#cbuffer color float4 dynamic
 #cbuffer mvp float4x4 dynamic
 
 struct PSInput {
@@ -16,5 +17,5 @@ PSInput VSMain(float4 position : POSITION0, float3 normal : NORMAL0) {
 
 float4 PSMain(PSInput input) : SV_TARGET {
     float3 sun_pos = normalize(float3(-50, 150, 250) - input.world_pos);
-    return clamp(float4(0.9,0.9,0.65,1) * dot(sun_pos, normalize(input.normal)), float4(0.2, 0.2, 0.23, 1), float4(1,1,1,1));
+    return clamp(float4(0.9,0.9,0.65,1) * dot(sun_pos, normalize(input.normal)), float4(0.2, 0.2, 0.23, 1), float4(1,1,1,1)) * color;
 };

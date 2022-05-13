@@ -291,7 +291,12 @@ main :: proc() {
             0, 0, 1.0, 0,
         }, view)
 
-        render_d3d12.set_mvp(&renderer_state, pipeline, &mvp)
+        color := linh.float4 {
+            1, 0, 0, 1,
+        }
+
+        render_d3d12.set_shader_constant_buffer(&renderer_state, pipeline, shader, render_d3d12.hash("color"), &color)
+        render_d3d12.set_shader_constant_buffer(&renderer_state, pipeline, shader, render_d3d12.hash("mvp"), &mvp)
         render_d3d12.update(&renderer_state, pipeline)
 
         cmdlist: rc.CommandList

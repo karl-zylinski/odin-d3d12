@@ -12,6 +12,14 @@ import "core:os"
 import rc "../render_commands"
 import rt "../render_types"
 import ss "../shader_system"
+import "core:intrinsics"
+import "core:crypto/md5"
+
+StrHash :: distinct u128
+
+hash :: proc(s: string) -> StrHash {
+    return transmute(StrHash)(md5.hash(s))
+}
 
 NUM_RENDERTARGETS :: 2
 
@@ -42,19 +50,26 @@ Pipeline :: struct {
     targets: [NUM_RENDERTARGETS]^d3d12.IResource,
     dsv_descriptor_heap: ^d3d12.IDescriptorHeap,
     rtv_descriptor_heap: ^d3d12.IDescriptorHeap,
-    cbv_descriptor_heaps: [NUM_RENDERTARGETS]^d3d12.IDescriptorHeap,
+    cbv_descriptor_heap: ^d3d12.IDescriptorHeap,
     mvp: hlsl.float4x4,
-    mat: [NUM_RENDERTARGETS]^d3d12.IResource,
-    mat_ptr: [NUM_RENDERTARGETS]^hlsl.float4x4,
+    mat: ^d3d12.IResource,
+    mat_ptr: ^hlsl.float4x4,
     command_allocator: ^d3d12.ICommandAllocator,
 }
 
 None :: struct {
 }
 
+ShaderConstantBuffer :: struct {
+    offset: int,
+    name: StrHash,
+}
+
 Shader :: struct {
     pipeline_state: ^d3d12.IPipelineState,
     root_signature: ^d3d12.IRootSignature,
+    constant_buffers: [8]ShaderConstantBuffer,
+    num_constant_buffers: int,
 }
 
 ResourceData :: union {
@@ -188,8 +203,7 @@ destroy_resource :: proc(s: ^State, handle: rt.Handle) {
             res^ = Resource{}
         }
         case Pipeline: {
-            r.mat[0]->Unmap(0, nil)
-            r.mat[1]->Unmap(0, nil)
+            r.mat->Unmap(0, nil)
             r.swapchain->Release()
             r.queue->Release()
             r.depth->Release()
@@ -197,8 +211,7 @@ destroy_resource :: proc(s: ^State, handle: rt.Handle) {
             r.targets[1]->Release()
             r.dsv_descriptor_heap->Release()
             r.rtv_descriptor_heap->Release()
-            r.cbv_descriptor_heaps[0]->Release()
-            r.cbv_descriptor_heaps[1]->Release()
+            r.cbv_descriptor_heap->Release()
             r.command_allocator->Release()
             res^ = Resource{}
         }
@@ -215,6 +228,16 @@ set_resource :: proc(s: ^State, handle: rt.Handle, res: ResourceData) {
     s.resources[index] = { handle = handle, resource = res }
 }
 
+constant_buffer_type_size :: proc(t: ss.ConstantBufferType) -> int {
+    switch (t) {
+        case .None: return 0
+        case .Float4x4: return 64
+        case .Float4: return 16
+    }
+
+    return 0
+}
+
 submit_command_list :: proc(s: ^State, commands: rc.CommandList) {
     hr: d3d12.HRESULT
     for command in commands {
@@ -228,7 +251,7 @@ submit_command_list :: proc(s: ^State, commands: rc.CommandList) {
                     if p, ok := &s.resources[c.pipeline].resource.(Pipeline); ok {
                         s.cmdlist->SetGraphicsRootSignature(shader.root_signature)
                         table_handle: d3d12.GPU_DESCRIPTOR_HANDLE
-                        p.cbv_descriptor_heaps[p.frame_index]->GetGPUDescriptorHandleForHeapStart(&table_handle)
+                        p.cbv_descriptor_heap->GetGPUDescriptorHandleForHeapStart(&table_handle)
                         s.cmdlist->SetGraphicsRootDescriptorTable(0, table_handle);
                         s.cmdlist->SetPipelineState(shader.pipeline_state)
                     }
@@ -303,13 +326,9 @@ submit_command_list :: proc(s: ^State, commands: rc.CommandList) {
                         Flags = .SHADER_VISIBLE,
                     };
 
-                    for i :u32= 0; i < NUM_RENDERTARGETS; i += 1 {
-                        hr = s.device->CreateDescriptorHeap(&desc, d3d12.IDescriptorHeap_UUID, (^rawptr)(&p.cbv_descriptor_heaps[i]))
-                        check(hr, s.info_queue, "Failed creating cbv descriptor heap")
-                    }
+                    hr = s.device->CreateDescriptorHeap(&desc, d3d12.IDescriptorHeap_UUID, (^rawptr)(&p.cbv_descriptor_heap))
+                    check(hr, s.info_queue, "Failed creating cbv descriptor heap")
                 }
-
-                p.mvp = 1
 
                 {
                     heap_props := d3d12.HEAP_PROPERTIES {
@@ -326,23 +345,20 @@ submit_command_list :: proc(s: ^State, commands: rc.CommandList) {
                         Layout = .ROW_MAJOR,
                     }
 
-                    for i := 0; i < NUM_RENDERTARGETS; i += 1 {
-                        hr = s.device->CreateCommittedResource(&heap_props, .NONE, &resource_desc, .GENERIC_READ, nil, d3d12.IResource_UUID, (^rawptr)(&p.mat[i]))
-                        check(hr, s.info_queue, "Failed creating commited resource")
+                    hr = s.device->CreateCommittedResource(&heap_props, .NONE, &resource_desc, .GENERIC_READ, nil, d3d12.IResource_UUID, (^rawptr)(&p.mat))
+                    check(hr, s.info_queue, "Failed creating commited resource")
 
-                        r: d3d12.RANGE = {}
-                        p.mat[i]->Map(0, &r, (^rawptr)(&p.mat_ptr[i]))
-                        mem.copy(p.mat_ptr[i], rawptr(&p.mvp[0]), 128)
+                    r: d3d12.RANGE = {}
+                    p.mat->Map(0, &r, (^rawptr)(&p.mat_ptr))
 
-                        cbv_desc := d3d12.CONSTANT_BUFFER_VIEW_DESC {
-                            SizeInBytes = 256,
-                            BufferLocation = p.mat[i]->GetGPUVirtualAddress(),
-                        }
-
-                        mat_handle: d3d12.CPU_DESCRIPTOR_HANDLE
-                        p.cbv_descriptor_heaps[i]->GetCPUDescriptorHandleForHeapStart(&mat_handle)
-                        s.device->CreateConstantBufferView(&cbv_desc, mat_handle)
+                    cbv_desc := d3d12.CONSTANT_BUFFER_VIEW_DESC {
+                        SizeInBytes = 256,
+                        BufferLocation = p.mat->GetGPUVirtualAddress(),
                     }
+
+                    mat_handle: d3d12.CPU_DESCRIPTOR_HANDLE
+                    p.cbv_descriptor_heap->GetCPUDescriptorHandleForHeapStart(&mat_handle)
+                    s.device->CreateConstantBufferView(&cbv_desc, mat_handle)
                 }
 
                      // Descripors describe the GPU data and are allocated from a Descriptor Heap
@@ -429,6 +445,16 @@ submit_command_list :: proc(s: ^State, commands: rc.CommandList) {
 
                 hr = d3d_compiler.Compile(def.code, uint(def.code_size), nil, nil, nil, "PSMain", "ps_4_0", compile_flags, 0, &ps, nil)
                 check(hr, s.info_queue, "Failed to compile pixel shader")
+
+                cb_offset := 0
+                for cb, index in def.constant_buffers {
+                    rd.constant_buffers[index] = {
+                        offset = cb_offset,
+                        name = hash(cb.name),
+                    }
+
+                    cb_offset += constant_buffer_type_size(cb.type)
+                }
 
                   /* 
                 From https://docs.microsoft.com/en-us/windows/win32/direct3d12/root-signatures-overview:
@@ -679,7 +705,7 @@ submit_command_list :: proc(s: ^State, commands: rc.CommandList) {
 
             case rc.SetPipeline:
                 if p, ok := &s.resources[c.handle].resource.(Pipeline); ok {
-                    s.cmdlist->SetDescriptorHeaps(1, &p.cbv_descriptor_heaps[p.frame_index]);
+                    s.cmdlist->SetDescriptorHeaps(1, &p.cbv_descriptor_heap);
                 }
 
             case rc.SetScissor:
@@ -824,34 +850,28 @@ ri_to_d3d_state :: proc(ri_state: rc.ResourceState) -> d3d12.RESOURCE_STATES {
     return .COMMON
 }
 
-update :: proc(s: ^State, pipeline: rt.Handle) {
+set_shader_constant_buffer :: proc(s: ^State, pipeline: rt.Handle, shader: rt.Handle, name: StrHash, v: ^$T) {
     if p, ok := &s.resources[pipeline].resource.(Pipeline); ok {
-        hr: d3d12.HRESULT
-        mem.copy(p.mat_ptr[p.frame_index], rawptr(&p.mvp[0]), 128)
-
-        for res in &s.resources {
-            if b, ok := &res.resource.(Buffer); ok {
-                if b.staging_buffer_updated {
-                    s.cmdlist->CopyBufferRegion(b.buffer, 0, b.staging_buffer, 0, u64(b.size))
-                    b.staging_buffer_updated = false
+        if s, ok := &s.resources[shader].resource.(Shader); ok {
+            for cb in s.constant_buffers {
+                if (cb.name == name) {
+                    mem.copy(intrinsics.ptr_offset((^u8)(p.mat_ptr), cb.offset), v, size_of(T))
+                    break
                 }
-            } 
+            }
         }
     }
 }
 
-set_mvp :: proc(s: ^State, pipeline: rt.Handle, mvp: ^hlsl.float4x4) {
-    if p, ok := &s.resources[pipeline].resource.(Pipeline); ok {
-        p.mvp = mvp^
+update :: proc(s: ^State, pipeline: rt.Handle) {
+    for res in &s.resources {
+        if b, ok := &res.resource.(Buffer); ok {
+            if b.staging_buffer_updated {
+                s.cmdlist->CopyBufferRegion(b.buffer, 0, b.staging_buffer, 0, u64(b.size))
+                b.staging_buffer_updated = false
+            }
+        } 
     }
-}
-
-mvp :: proc(s: ^State, pipeline: rt.Handle) -> hlsl.float4x4 {
-    if p, ok := &s.resources[pipeline].resource.(Pipeline); ok {
-        return p.mvp
-    }
-
-    return {}
 }
 
 check :: proc(res: d3d12.HRESULT, iq: ^d3d12.IInfoQueue, message: string) {
