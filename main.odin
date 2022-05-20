@@ -17,16 +17,18 @@ import "core:math/linalg/hlsl"
 import lin "core:math/linalg"
 import "shader_system"
 
-load_teapot :: proc() -> ([dynamic]f32, [dynamic]u32, [dynamic]f32)  {
-    f, err := os.open("teapot.obj")
+load_teapot :: proc(filename: string) -> ([dynamic]f32, [dynamic]u32, [dynamic]f32, [dynamic]u32)  {
+    f, err := os.open(filename)
     defer os.close(f)
     fs, _ := os.file_size(f)
-    teapot_bytes := make([]byte, fs, context.temp_allocator)
+    teapot_bytes := make([]byte, fs)
+    defer delete(teapot_bytes)
     os.read(f, teapot_bytes)
     teapot := strings.string_from_ptr(&teapot_bytes[0], int(fs))
-    out := make([dynamic]f32, context.temp_allocator)
-    normals_out := make([dynamic]f32, context.temp_allocator)
-    indices_out := make([dynamic]u32, context.temp_allocator)
+    out: [dynamic]f32
+    normals_out: [dynamic]f32
+    indices_out: [dynamic]u32
+    normal_indices_out: [dynamic]u32
 
     parse_comment :: proc(teapot: string, i_in: int) -> int {
         i := i_in
@@ -97,15 +99,16 @@ load_teapot :: proc() -> ([dynamic]f32, [dynamic]u32, [dynamic]f32)  {
         return i, u32(ii - 1), u32(ni - 1)
     }
 
-    parse_face :: proc(teapot: string, i_in: int, out: ^[dynamic]u32) -> int {
+    parse_face :: proc(teapot: string, i_in: int, out: ^[dynamic]u32, normal_indices_out: ^[dynamic]u32) -> int {
         i := skip_whitespace(teapot, i_in + 1)
-        n0, n1, n2: u32
-        i, n0, _ = parse_face_index(teapot, i)
+        n0, n1, n2, in0, in1, in2: u32
+        i, n0, in0 = parse_face_index(teapot, i)
         i = skip_whitespace(teapot, i)
-        i, n1, _ = parse_face_index(teapot, i)
+        i, n1, in1 = parse_face_index(teapot, i)
         i = skip_whitespace(teapot, i)
-        i, n2, _ = parse_face_index(teapot, i)
+        i, n2, in2 = parse_face_index(teapot, i)
         append(out, n0, n1, n2)
+        append(normal_indices_out, in0, in1, in2)
         return i
     }
 
@@ -117,19 +120,57 @@ load_teapot :: proc() -> ([dynamic]f32, [dynamic]u32, [dynamic]f32)  {
             } else if teapot[i + 1] == 'n' {
                 i = parse_vertex(teapot, i + 2, &normals_out)
             }
-            case 'f': i = parse_face(teapot, i, &indices_out)
+            case 'f': i = parse_face(teapot, i, &indices_out, &normal_indices_out)
         }
     }
 
-    return out, indices_out, normals_out
+    return out, indices_out, normals_out, normal_indices_out
 }
 
-main :: proc() {
-    tracking_allocator: mem.Tracking_Allocator
-    mem.tracking_allocator_init(&tracking_allocator, runtime.default_allocator())
-    allocator := mem.tracking_allocator(&tracking_allocator)
-    context.allocator = allocator
+Renderable :: struct {
+    vertex_buffer: render_types.Handle,
+    index_buffer: render_types.Handle,
+}
 
+create_renderable :: proc(renderer_state: ^render_d3d12.State, rc_state: ^rc.State, filename: string) -> (ren: Renderable) {
+    vertices, indices, normals, normal_indices := load_teapot(filename)
+    defer delete(vertices)
+    defer delete(indices)
+    defer delete(normals)
+    defer delete(normal_indices)
+
+    vertex_data := make([]f32, len(vertices) * 2)
+    defer delete(vertex_data)
+    vdi := 0
+    for v, i in vertices {
+        vertex_data[vdi] = vertices[i]
+        vdi += 1
+        if (i + 1) % 3 == 0 && i != 0 {
+            vdi += 3
+        }
+    }
+
+    for i in 0..<len(normal_indices) {
+        n_idx := normal_indices[i] * 3
+        v_idx := indices[i] * 6 + 3
+        vertex_data[v_idx] = normals[n_idx]
+        vertex_data[v_idx + 1] = normals[n_idx + 1]
+        vertex_data[v_idx + 2] = normals[n_idx + 2]
+    }
+
+    vertex_buffer_size := len(vertex_data) * size_of(vertex_data[0])
+    index_buffer_size := len(indices) * size_of(indices[0])
+
+    cmdlist: rc.CommandList
+    defer delete(cmdlist)
+    ren.vertex_buffer = rc.create_buffer(rc_state, &cmdlist, rc.VertexBufferDesc { stride = 24 }, rawptr(&vertex_data[0]), vertex_buffer_size, .Dynamic)
+    ren.index_buffer = rc.create_buffer(rc_state, &cmdlist, rc.IndexBufferDesc { stride = 4 }, rawptr(&indices[0]), index_buffer_size, .Dynamic)
+    render_d3d12.submit_command_list(renderer_state, cmdlist)
+
+    return ren
+}
+
+run :: proc() {
     // Init SDL and create window
     if err := sdl2.Init({.VIDEO}); err != 0 {
         fmt.eprintln(err)
@@ -151,23 +192,6 @@ main :: proc() {
     sdl2.SetRelativeMouseMode(true)
     defer sdl2.DestroyWindow(window)
 
-    vertices, indices, normals := load_teapot()
-
-    vertex_data := make([]f32, len(vertices) * 2, context.temp_allocator)
-    vdi := 0
-    for v, i in vertices {
-        vertex_data[vdi] = vertices[i]
-        vdi += 1
-        if (i + 1) % 3 == 0 && i != 0 {
-            vertex_data[vdi] = normals[i - 2]
-            vertex_data[vdi + 1] = normals[i - 1]
-            vertex_data[vdi + 2] = normals[i]
-            vdi += 3
-        }
-    }
-
-   // fmt.println(vertex_data)
-
     // Get the window handle from SDL
     window_info: sdl2.SysWMinfo
     sdl2.GetWindowWMInfo(window, &window_info)
@@ -175,13 +199,8 @@ main :: proc() {
     renderer_state := render_d3d12.create(wx, wy, window_handle)
     ri_state: rc.State
     fence: render_types.Handle
-    vertex_buffer: render_types.Handle
-    index_buffer: render_types.Handle
     pipeline: render_types.Handle
     shader: render_types.Handle
-
-    vertex_buffer_size := len(vertex_data) * size_of(vertex_data[0])
-    index_buffer_size := len(indices) * size_of(indices[0])
 
     {
         cmdlist: rc.CommandList
@@ -189,11 +208,12 @@ main :: proc() {
         pipeline = rc.create_pipeline(&ri_state, &cmdlist, f32(wx), f32(wy), render_types.WindowHandle(uintptr(window_handle)))
         shader_def := shader_system.load_shader("shader.shader")
         shader = rc.create_shader(&ri_state, &cmdlist, shader_def)
-        vertex_buffer = rc.create_buffer(&ri_state, &cmdlist, rc.VertexBufferDesc { stride = 24 }, rawptr(&vertex_data[0]), vertex_buffer_size, .Dynamic)
-        index_buffer = rc.create_buffer(&ri_state, &cmdlist, rc.IndexBufferDesc { stride = 4 }, rawptr(&indices[0]), index_buffer_size, .Dynamic)
         fence = rc.create_fence(&ri_state, &cmdlist)
         render_d3d12.submit_command_list(&renderer_state, cmdlist)
     }
+
+    ren := create_renderable(&renderer_state, &ri_state, "teapot.obj")
+    ren2 := create_renderable(&renderer_state, &ri_state, "car.obj")
 
     camera_pos := hlsl.float3 { 0, 0, -1 }
     camera_yaw: f32 = 0
@@ -241,22 +261,6 @@ main :: proc() {
                         input[3] = true
                     }
 
-                    if e.key.keysym.sym == .B {
-                        cmdlist: rc.CommandList
-                        defer render_d3d12.submit_command_list(&renderer_state, cmdlist)
-                        defer delete(cmdlist)
-
-                        nv := [?]f32 {
-                            // pos            color
-                             0.0 , 1.0, 0,  1,0,0,0,
-                             0.5, -0.5, 0,  0,1,0,0,
-                            -0.5, -0.5, 0,  0,0,1,0,
-                        }
-
-                        nv_size := len(nv) * size_of(nv[0])
-                        rc.update_buffer(&cmdlist, vertex_buffer, rawptr(&nv[0]), nv_size)
-                    }
-
                 case .MOUSEMOTION: {
                     camera_yaw += f32(e.motion.xrel) * 0.001
                     camera_pitch += f32(e.motion.yrel) * 0.001
@@ -287,19 +291,11 @@ main :: proc() {
         near: f32 = 0.01
         far: f32 = 100
 
-        mvp := lin.mul(hlsl.float4x4 {
-            1, 0, 0, 0,
-            0, 1, 0, 0,
-            0, 0, far/(far - near), (-far * near)/(far - near),
-            0, 0, 1.0, 0,
-        }, view)
-
         color := hlsl.float4 {
             1, 0, 0, 1,
         }
 
         render_d3d12.set_shader_constant_buffer(&renderer_state, pipeline, shader, render_d3d12.hash("color"), &color)
-        render_d3d12.set_shader_constant_buffer(&renderer_state, pipeline, shader, render_d3d12.hash("mvp"), &mvp)
 
         sun_pos := hlsl.float3 {
             math.cos(t)*50, 0, math.sin(t)*50,
@@ -328,10 +324,52 @@ main :: proc() {
         })
         append(&cmdlist, rc.ClearRenderTarget { render_target = { pipeline = pipeline, }, clear_color = {0, 0, 0, 1}, })
         append(&cmdlist, rc.SetRenderTarget { render_target = { pipeline = pipeline, }, })
-        append(&cmdlist, rc.DrawCall {
-            vertex_buffer = vertex_buffer,
-            index_buffer = index_buffer,
-        })
+
+        {
+
+            model: hlsl.float4x4 = 1
+            //model[3][0] = math.cos(t*0.1)*10
+
+            mvp := lin.mul(hlsl.float4x4 {
+                1, 0, 0, 0,
+                0, 1, 0, 0,
+                0, 0, far/(far - near), (-far * near)/(far - near),
+                0, 0, 1.0, 0,
+            }, lin.mul(view, model))
+
+
+            render_d3d12.set_shader_constant_buffer(&renderer_state, pipeline, shader, render_d3d12.hash("mvp"), &mvp)
+
+            append(&cmdlist, rc.DrawCall {
+                vertex_buffer = ren.vertex_buffer,
+                index_buffer = ren.index_buffer,
+            })
+
+        }
+
+        {
+            model: hlsl.float4x4 = 1
+            model[3][0] = 1
+
+            mvp := lin.mul(hlsl.float4x4 {
+                1, 0, 0, 0,
+                0, 1, 0, 0,
+                0, 0, far/(far - near), (-far * near)/(far - near),
+                0, 0, 1.0, 0,
+            }, lin.mul(view, model))
+
+            color := hlsl.float4 {
+                1, 0, 0, 1,
+            }
+
+            render_d3d12.set_shader_constant_buffer(&renderer_state, pipeline, shader, render_d3d12.hash("mvp"), &mvp)
+
+            append(&cmdlist, rc.DrawCall {
+                vertex_buffer = ren2.vertex_buffer,
+                index_buffer = ren2.index_buffer,
+            })
+        }
+
         append(&cmdlist, rc.ResourceTransition {
             before = .RenderTarget,
             after = .Present,    
@@ -347,18 +385,28 @@ main :: proc() {
         defer delete(cmdlist)
         rc.destroy_resource(&ri_state, &cmdlist, shader)
         rc.destroy_resource(&ri_state, &cmdlist, fence)
-        rc.destroy_resource(&ri_state, &cmdlist, vertex_buffer)
-        rc.destroy_resource(&ri_state, &cmdlist, index_buffer)
+        rc.destroy_resource(&ri_state, &cmdlist, ren.vertex_buffer)
+        rc.destroy_resource(&ri_state, &cmdlist, ren.index_buffer)
         rc.destroy_resource(&ri_state, &cmdlist, pipeline)
         render_d3d12.submit_command_list(&renderer_state, cmdlist)
     }
     
     render_d3d12.destroy(&renderer_state)
     rc.destroy_state(&ri_state)
+}
+
+main :: proc() {
+
+    tracking_allocator: mem.Tracking_Allocator
+    mem.tracking_allocator_init(&tracking_allocator, runtime.default_allocator())
+    allocator := mem.tracking_allocator(&tracking_allocator)
+    context.allocator = allocator
+
+    run()
 
     for key, value in tracking_allocator.allocation_map {
         fmt.printf("%v: Leaked %v bytes\n", value.location, value.size)
     }
 
-    mem.tracking_allocator_destroy(&tracking_allocator);
+    mem.tracking_allocator_destroy(&tracking_allocator)
 }
