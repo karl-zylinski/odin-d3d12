@@ -52,8 +52,8 @@ Pipeline :: struct {
     rtv_descriptor_heap: ^d3d12.IDescriptorHeap,
     cbv_descriptor_heap: ^d3d12.IDescriptorHeap,
     mvp: hlsl.float4x4,
-    mat: ^d3d12.IResource,
-    mat_ptr: ^hlsl.float4x4,
+    constant_buffer: ^d3d12.IResource,
+    constant_buffer_map: rawptr,
     command_allocator: ^d3d12.ICommandAllocator,
 }
 
@@ -203,7 +203,7 @@ destroy_resource :: proc(s: ^State, handle: rt.Handle) {
             res^ = Resource{}
         }
         case Pipeline: {
-            r.mat->Unmap(0, nil)
+            r.constant_buffer->Unmap(0, nil)
             r.swapchain->Release()
             r.queue->Release()
             r.depth->Release()
@@ -346,15 +346,15 @@ submit_command_list :: proc(s: ^State, commands: rc.CommandList) {
                         Layout = .ROW_MAJOR,
                     }
 
-                    hr = s.device->CreateCommittedResource(&heap_props, .NONE, &resource_desc, .GENERIC_READ, nil, d3d12.IResource_UUID, (^rawptr)(&p.mat))
+                    hr = s.device->CreateCommittedResource(&heap_props, .NONE, &resource_desc, .GENERIC_READ, nil, d3d12.IResource_UUID, (^rawptr)(&p.constant_buffer))
                     check(hr, s.info_queue, "Failed creating commited resource")
 
                     r: d3d12.RANGE = {}
-                    p.mat->Map(0, &r, (^rawptr)(&p.mat_ptr))
+                    p.constant_buffer->Map(0, &r, (^rawptr)(&p.constant_buffer_map))
 
                     cbv_desc := d3d12.CONSTANT_BUFFER_VIEW_DESC {
                         SizeInBytes = 256,
-                        BufferLocation = p.mat->GetGPUVirtualAddress(),
+                        BufferLocation = p.constant_buffer->GetGPUVirtualAddress(),
                     }
 
                     mat_handle: d3d12.CPU_DESCRIPTOR_HANDLE
@@ -850,7 +850,7 @@ set_shader_constant_buffer :: proc(s: ^State, pipeline: rt.Handle, shader: rt.Ha
         if s, ok := &s.resources[shader].resource.(Shader); ok {
             for cb in s.constant_buffers {
                 if (cb.name == name) {
-                    mem.copy(intrinsics.ptr_offset((^u8)(p.mat_ptr), cb.offset), v, size_of(T))
+                    mem.copy(intrinsics.ptr_offset((^u8)(p.constant_buffer_map), cb.offset + int(p.frame_index * 96)), v, size_of(T))
                     break
                 }
             }

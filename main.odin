@@ -396,11 +396,9 @@ run :: proc() {
 }
 
 main :: proc() {
-
     tracking_allocator: mem.Tracking_Allocator
-    mem.tracking_allocator_init(&tracking_allocator, runtime.default_allocator())
-    allocator := mem.tracking_allocator(&tracking_allocator)
-    context.allocator = allocator
+    mem.tracking_allocator_init(&tracking_allocator, context.allocator)
+    context.allocator = mem.tracking_allocator(&tracking_allocator)
 
     run()
 
