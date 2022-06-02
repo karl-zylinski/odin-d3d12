@@ -8,6 +8,7 @@ import "vendor:directx/d3d_compiler"
 import "core:math/linalg/hlsl"
 import "core:math/linalg"
 import "core:sys/windows"
+import "core:strings"
 import "core:os"
 import rc "../render_commands"
 import rt "../render_types"
@@ -239,13 +240,16 @@ constant_buffer_type_size :: proc(t: ss.ConstantBufferType) -> int {
     return 0
 }
 
-submit_command_list :: proc(s: ^State, commands: rc.CommandList) {
+submit_command_list :: proc(s: ^State, commands: ^rc.CommandList) {
     hr: d3d12.HRESULT
     for command in commands {
-        switch c in command {
+        switch c in &command {
             case rc.Noop: {}
             case rc.DestroyResource: {
                 destroy_resource(s, c.handle)
+            }
+            case rc.SetPushConstants: {
+                s.cmdlist->SetGraphicsRoot32BitConstants(1, u32(c.data_size)/4, rawptr(&c.data[0]), 0)
             }
             case rc.SetShader: {
                 if shader, ok := &s.resources[c.handle].resource.(Shader); ok {
@@ -441,10 +445,20 @@ submit_command_list :: proc(s: ^State, commands: rc.CommandList) {
 
                 def := c.shader
 
-                hr = d3d_compiler.Compile(def.code, uint(def.code_size), nil, nil, nil, "VSMain", "vs_4_0", compile_flags, 0, &vs, nil)
+                errors: ^d3d12.IBlob = nil
+
+                hr = d3d_compiler.Compile(def.code, uint(def.code_size), nil, nil, nil, "VSMain", "vs_5_1", compile_flags, 0, &vs, &errors)
+                errors_sz := errors != nil ? errors->GetBufferSize() : 0
+
+                if errors_sz > 0 {
+                    errors_ptr := errors->GetBufferPointer()
+                    error_str := strings.string_from_ptr((^u8)(errors_ptr), int(errors_sz))
+                    fmt.println(error_str)
+                }
+
                 check(hr, s.info_queue, "Failed to compile vertex shader")
 
-                hr = d3d_compiler.Compile(def.code, uint(def.code_size), nil, nil, nil, "PSMain", "ps_4_0", compile_flags, 0, &ps, nil)
+                hr = d3d_compiler.Compile(def.code, uint(def.code_size), nil, nil, nil, "PSMain", "ps_5_1", compile_flags, 0, &ps, &errors)
                 check(hr, s.info_queue, "Failed to compile pixel shader")
 
                 cb_offset := 0
@@ -474,7 +488,7 @@ submit_command_list :: proc(s: ^State, commands: rc.CommandList) {
                             NumDescriptors = 1,
                             BaseShaderRegister = 0,
                             RegisterSpace = 0,
-                            OffsetInDescriptorsFromTableStart = d3d12.DESCRIPTOR_RANGE_OFFSET_APPEND,
+                            OffsetInDescriptorsFromTableStart = 0,
                         },
                     }
 
@@ -492,12 +506,21 @@ submit_command_list :: proc(s: ^State, commands: rc.CommandList) {
                             ParameterType = .DESCRIPTOR_TABLE,
                             ShaderVisibility = .ALL,
                         },
+                        {
+                            ParameterType = ._32BIT_CONSTANTS,
+                            ShaderVisibility = .ALL,
+                        },
                     }
 
                     root_parameters[0].DescriptorTable = descriptor_table
+                    root_parameters[1].Constants = {
+                        ShaderRegister = 1,
+                        RegisterSpace = 0, 
+                        Num32BitValues = 32,
+                    }
 
                     vdesc.Desc_1_0 = {
-                        NumParameters = 1,
+                        NumParameters = 2,
                         pParameters = &root_parameters[0],
                         Flags = .ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT,
                     }

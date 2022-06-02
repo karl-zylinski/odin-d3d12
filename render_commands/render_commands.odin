@@ -119,6 +119,11 @@ DestroyResource :: struct {
     handle: Handle,
 }
 
+SetPushConstants :: struct {
+    data: [256]u8,
+    data_size: int,
+}
+
 Command :: union {
     Noop,
     Present,
@@ -138,6 +143,7 @@ Command :: union {
     CreateShader,
     SetShader,
     DestroyResource,
+    SetPushConstants,
 }
 
 CommandList :: distinct [dynamic]Command

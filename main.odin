@@ -165,7 +165,7 @@ create_renderable :: proc(renderer_state: ^render_d3d12.State, rc_state: ^rc.Sta
     defer delete(cmdlist)
     ren.vertex_buffer = rc.create_buffer(rc_state, &cmdlist, rc.VertexBufferDesc { stride = 24 }, rawptr(&vertex_data[0]), vertex_buffer_size, .Dynamic)
     ren.index_buffer = rc.create_buffer(rc_state, &cmdlist, rc.IndexBufferDesc { stride = 4 }, rawptr(&indices[0]), index_buffer_size, .Dynamic)
-    render_d3d12.submit_command_list(renderer_state, cmdlist)
+    render_d3d12.submit_command_list(renderer_state, &cmdlist)
 
     return ren
 }
@@ -209,7 +209,7 @@ run :: proc() {
         shader_def := shader_system.load_shader("shader.shader")
         shader = rc.create_shader(&ri_state, &cmdlist, shader_def)
         fence = rc.create_fence(&ri_state, &cmdlist)
-        render_d3d12.submit_command_list(&renderer_state, cmdlist)
+        render_d3d12.submit_command_list(&renderer_state, &cmdlist)
     }
 
     ren := create_renderable(&renderer_state, &ri_state, "teapot.obj")
@@ -337,8 +337,14 @@ run :: proc() {
                 0, 0, 1.0, 0,
             }, lin.mul(view, model))
 
+            push_constant_data := rc.SetPushConstants {
+                data_size = 64,
+            }
 
-            render_d3d12.set_shader_constant_buffer(&renderer_state, pipeline, shader, render_d3d12.hash("mvp"), &mvp)
+            mem.copy(rawptr(&push_constant_data.data[0]), &mvp, 64)
+            append(&cmdlist, push_constant_data)
+
+            //render_d3d12.set_shader_constant_buffer(&renderer_state, pipeline, shader, render_d3d12.hash("mvp"), &mvp)
 
             append(&cmdlist, rc.DrawCall {
                 vertex_buffer = ren.vertex_buffer,
@@ -362,7 +368,14 @@ run :: proc() {
                 1, 0, 0, 1,
             }
 
-            render_d3d12.set_shader_constant_buffer(&renderer_state, pipeline, shader, render_d3d12.hash("mvp"), &mvp)
+            push_constant_data := rc.SetPushConstants {
+                data_size = 64,
+            }
+
+            mem.copy(rawptr(&push_constant_data.data[0]), &mvp, 64)
+            append(&cmdlist, push_constant_data)
+
+            //render_d3d12.set_shader_constant_buffer(&renderer_state, pipeline, shader, render_d3d12.hash("mvp"), &mvp)
 
             append(&cmdlist, rc.DrawCall {
                 vertex_buffer = ren2.vertex_buffer,
@@ -377,7 +390,7 @@ run :: proc() {
         append(&cmdlist, rc.Execute{ pipeline = pipeline, })
         append(&cmdlist, rc.Present{ handle = pipeline })
         append(&cmdlist, rc.WaitForFence { fence = fence, pipeline = pipeline, })
-        render_d3d12.submit_command_list(&renderer_state, cmdlist)
+        render_d3d12.submit_command_list(&renderer_state, &cmdlist)
     }
 
     {
@@ -388,7 +401,7 @@ run :: proc() {
         rc.destroy_resource(&ri_state, &cmdlist, ren.vertex_buffer)
         rc.destroy_resource(&ri_state, &cmdlist, ren.index_buffer)
         rc.destroy_resource(&ri_state, &cmdlist, pipeline)
-        render_d3d12.submit_command_list(&renderer_state, cmdlist)
+        render_d3d12.submit_command_list(&renderer_state, &cmdlist)
     }
     
     render_d3d12.destroy(&renderer_state)

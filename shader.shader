@@ -1,3 +1,11 @@
+ByteAddressBuffer constantBuffer[] : register(t0, space1);
+
+struct PushConstants {
+    float4x4 mvp2;
+};
+
+ConstantBuffer<PushConstants> push_constants : register(b1, space0);
+
 #cbuffer color float4 dynamic
 #cbuffer sun_pos float3 dynamic
 #cbuffer mvp float4x4 dynamic
@@ -10,7 +18,7 @@ struct PSInput {
 
 PSInput VSMain(float4 position : POSITION0, float3 normal : NORMAL0) {
     PSInput result;
-    result.position = mul(mvp, position);
+    result.position = mul(push_constants.mvp2, position);
     result.world_pos = position.xyz;
     result.normal = normal;
     return result;
