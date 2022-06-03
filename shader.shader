@@ -1,4 +1,4 @@
-ByteAddressBuffer constantBuffer[] : register(t0, space1);
+ByteAddressBuffer constant_buffer : register(t0, space1);
 
 struct PushConstants {
     float4x4 mvp2;
@@ -26,5 +26,10 @@ PSInput VSMain(float4 position : POSITION0, float3 normal : NORMAL0) {
 
 float4 PSMain(PSInput input) : SV_TARGET {
     float3 sun_dir = normalize(sun_pos - input.world_pos);
-    return clamp(float4(0.9,0.9,0.65,1) * saturate(dot(sun_dir, normalize(input.normal))), float4(0.2, 0.2, 0.23, 1), float4(1,1,1,1)) * color;
+
+    float4 cc = asfloat(constant_buffer.Load4(0));
+
+
+
+    return clamp(float4(0.9,0.9,0.65,1) * saturate(dot(sun_dir, normalize(input.normal))), float4(0.2, 0.2, 0.23, 1), float4(1,1,1,1)) * cc;
 };

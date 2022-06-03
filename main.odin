@@ -355,7 +355,7 @@ run :: proc() {
 
         {
             model: hlsl.float4x4 = 1
-            model[3][0] = 1
+            model[3][0] = 3
 
             mvp := lin.mul(hlsl.float4x4 {
                 1, 0, 0, 0,

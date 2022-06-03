@@ -55,6 +55,8 @@ Pipeline :: struct {
     mvp: hlsl.float4x4,
     constant_buffer: ^d3d12.IResource,
     constant_buffer_map: rawptr,
+    constant_buffer_bindless: ^d3d12.IResource,
+    constant_buffer_bindless_map: rawptr,
     command_allocator: ^d3d12.ICommandAllocator,
 }
 
@@ -258,6 +260,10 @@ submit_command_list :: proc(s: ^State, commands: ^rc.CommandList) {
                         table_handle: d3d12.GPU_DESCRIPTOR_HANDLE
                         p.cbv_descriptor_heap->GetGPUDescriptorHandleForHeapStart(&table_handle)
                         s.cmdlist->SetGraphicsRootDescriptorTable(0, table_handle);
+                        table_handle2: d3d12.GPU_DESCRIPTOR_HANDLE
+                        p.cbv_descriptor_heap->GetGPUDescriptorHandleForHeapStart(&table_handle2)
+                        table_handle2.ptr += u64(1 * s.device->GetDescriptorHandleIncrementSize(.CBV_SRV_UAV))
+                        s.cmdlist->SetGraphicsRootDescriptorTable(1, table_handle2);
                         s.cmdlist->SetPipelineState(shader.pipeline_state)
                     }
                 }
@@ -364,6 +370,38 @@ submit_command_list :: proc(s: ^State, commands: ^rc.CommandList) {
                     mat_handle: d3d12.CPU_DESCRIPTOR_HANDLE
                     p.cbv_descriptor_heap->GetCPUDescriptorHandleForHeapStart(&mat_handle)
                     s.device->CreateConstantBufferView(&cbv_desc, mat_handle)
+                }
+
+                {
+                    heap_props := d3d12.HEAP_PROPERTIES {
+                        Type = .UPLOAD,
+                    }
+
+                    resource_desc := d3d12.RESOURCE_DESC {
+                        Dimension = .BUFFER,
+                        Width = 1024,
+                        Height = 1,
+                        DepthOrArraySize = 1,
+                        MipLevels = 1,
+                        SampleDesc = { Count = 1, Quality = 0, },
+                        Layout = .ROW_MAJOR,
+                    }
+
+                    hr = s.device->CreateCommittedResource(&heap_props, .NONE, &resource_desc, .GENERIC_READ, nil, d3d12.IResource_UUID, (^rawptr)(&p.constant_buffer_bindless))
+                    check(hr, s.info_queue, "Failed creating commited resource")
+
+                    r: d3d12.RANGE = {}
+                    p.constant_buffer_bindless->Map(0, &r, (^rawptr)(&p.constant_buffer_bindless_map))
+
+                    cbv_desc := d3d12.CONSTANT_BUFFER_VIEW_DESC {
+                        SizeInBytes = 1024,
+                        BufferLocation = p.constant_buffer_bindless->GetGPUVirtualAddress(),
+                    }
+
+                    res_handle: d3d12.CPU_DESCRIPTOR_HANDLE
+                    p.cbv_descriptor_heap->GetCPUDescriptorHandleForHeapStart(&res_handle)
+                    res_handle.ptr += uint(1 * s.device->GetDescriptorHandleIncrementSize(.CBV_SRV_UAV))
+                    s.device->CreateConstantBufferView(&cbv_desc, res_handle)
                 }
 
                      // Descripors describe the GPU data and are allocated from a Descriptor Heap
@@ -488,7 +526,14 @@ submit_command_list :: proc(s: ^State, commands: ^rc.CommandList) {
                             NumDescriptors = 1,
                             BaseShaderRegister = 0,
                             RegisterSpace = 0,
-                            OffsetInDescriptorsFromTableStart = 0,
+                            OffsetInDescriptorsFromTableStart = d3d12.DESCRIPTOR_RANGE_OFFSET_APPEND,
+                        },
+                        {
+                            RangeType = .SRV,
+                            NumDescriptors = 1,
+                            BaseShaderRegister = 0,
+                            RegisterSpace = 1,
+                            OffsetInDescriptorsFromTableStart = d3d12.DESCRIPTOR_RANGE_OFFSET_APPEND,
                         },
                     }
 
@@ -873,7 +918,7 @@ set_shader_constant_buffer :: proc(s: ^State, pipeline: rt.Handle, shader: rt.Ha
         if s, ok := &s.resources[shader].resource.(Shader); ok {
             for cb in s.constant_buffers {
                 if (cb.name == name) {
-                    mem.copy(intrinsics.ptr_offset((^u8)(p.constant_buffer_map), cb.offset + int(p.frame_index * 96)), v, size_of(T))
+                    mem.copy(intrinsics.ptr_offset((^u8)(p.constant_buffer_bindless_map), cb.offset/* + int(p.frame_index * 96)*/), v, size_of(T))
                     break
                 }
             }
