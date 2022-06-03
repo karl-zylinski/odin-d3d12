@@ -5,6 +5,7 @@ import "../render_types"
 import "core:math/linalg/hlsl"
 import "../zg_math"
 import "../shader_system"
+import "../base"
 
 Handle :: render_types.Handle
 
@@ -124,6 +125,14 @@ SetPushConstants :: struct {
     data_size: int,
 }
 
+SetConstant :: struct {
+    name: base.StrHash,
+    data: [256]u8,
+    type: shader_system.ConstantBufferType,
+    shader: Handle,
+    pipeline: Handle,
+}
+
 Command :: union {
     Noop,
     Present,
@@ -144,6 +153,7 @@ Command :: union {
     SetShader,
     DestroyResource,
     SetPushConstants,
+    SetConstant,
 }
 
 CommandList :: distinct [dynamic]Command
@@ -223,6 +233,18 @@ create_shader :: proc(s: ^State, command_list: ^CommandList, shader: shader_syst
 
     append(command_list, c)
     return h
+}
+
+set_constant :: proc(s: ^State, command_list: ^CommandList, name: base.StrHash, type: shader_system.ConstantBufferType, data: ^$T, shader: Handle, pipeline: Handle) {
+    c := SetConstant {
+        name = name,
+        type = type,
+        shader = shader,
+        pipeline = pipeline,
+    }
+
+    mem.copy(rawptr(&c.data[0]), data, size_of(data^))
+    append(command_list, c)
 }
 
 State :: struct {

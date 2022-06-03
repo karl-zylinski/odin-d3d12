@@ -16,6 +16,7 @@ import "core:math"
 import "core:math/linalg/hlsl"
 import lin "core:math/linalg"
 import "shader_system"
+import "base"
 
 load_teapot :: proc(filename: string) -> ([dynamic]f32, [dynamic]u32, [dynamic]f32, [dynamic]u32)  {
     f, err := os.open(filename)
@@ -295,12 +296,9 @@ run :: proc() {
             1, 0, 0, 1,
         }
 
-        render_d3d12.set_shader_constant_buffer(&renderer_state, pipeline, shader, render_d3d12.hash("color"), &color)
-
         sun_pos := hlsl.float3 {
             math.cos(t)*50, 0, math.sin(t)*50,
         }
-        render_d3d12.set_shader_constant_buffer(&renderer_state, pipeline, shader, render_d3d12.hash("sun_pos"), &sun_pos)
         render_d3d12.update(&renderer_state, pipeline)
 
         cmdlist: rc.CommandList
@@ -312,6 +310,10 @@ run :: proc() {
             handle = shader,
             pipeline = pipeline,
         })
+
+        rc.set_constant(&ri_state, &cmdlist, base.hash("sun_pos"), .Float3, &sun_pos, shader, pipeline);
+        rc.set_constant(&ri_state, &cmdlist, base.hash("color"), .Float4, &color, shader, pipeline);
+
         append(&cmdlist, rc.SetScissor {
             rect = { w = f32(wx), h = f32(wy), },
         })
@@ -326,7 +328,6 @@ run :: proc() {
         append(&cmdlist, rc.SetRenderTarget { render_target = { pipeline = pipeline, }, })
 
         {
-
             model: hlsl.float4x4 = 1
             //model[3][0] = math.cos(t*0.1)*10
 
@@ -337,20 +338,12 @@ run :: proc() {
                 0, 0, 1.0, 0,
             }, lin.mul(view, model))
 
-            push_constant_data := rc.SetPushConstants {
-                data_size = 64,
-            }
-
-            mem.copy(rawptr(&push_constant_data.data[0]), &mvp, 64)
-            append(&cmdlist, push_constant_data)
-
-            //render_d3d12.set_shader_constant_buffer(&renderer_state, pipeline, shader, render_d3d12.hash("mvp"), &mvp)
+            rc.set_constant(&ri_state, &cmdlist, base.hash("mvp"), .Float4x4, &mvp, shader, pipeline);
 
             append(&cmdlist, rc.DrawCall {
                 vertex_buffer = ren.vertex_buffer,
                 index_buffer = ren.index_buffer,
             })
-
         }
 
         {
@@ -368,14 +361,7 @@ run :: proc() {
                 1, 0, 0, 1,
             }
 
-            push_constant_data := rc.SetPushConstants {
-                data_size = 64,
-            }
-
-            mem.copy(rawptr(&push_constant_data.data[0]), &mvp, 64)
-            append(&cmdlist, push_constant_data)
-
-            //render_d3d12.set_shader_constant_buffer(&renderer_state, pipeline, shader, render_d3d12.hash("mvp"), &mvp)
+            rc.set_constant(&ri_state, &cmdlist, base.hash("mvp"), .Float4x4, &mvp, shader, pipeline);
 
             append(&cmdlist, rc.DrawCall {
                 vertex_buffer = ren2.vertex_buffer,

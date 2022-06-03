@@ -133,6 +133,17 @@ load_shader :: proc(path: string) -> Shader {
         return code[start:i], i
     }
 
+    hlsl_type :: proc(type: ConstantBufferType) -> string {
+        switch type {
+            case .None: return ""
+            case .Float4x4: return "float4x4"
+            case .Float4: return "float4"
+            case .Float3: return "float3"
+        }
+
+        return ""
+    }
+
     parse_cbuffers :: proc(code: string, shader: ^Shader) {
         cbuf_idx := 0
         code_builder := strings.make_builder(allocator = context.temp_allocator)
@@ -149,34 +160,52 @@ load_shader :: proc(path: string) -> Shader {
                 }
             }
         }
-        cbuf_builder := strings.make_builder(allocator = context.temp_allocator)
+        generated := strings.make_builder(allocator = context.temp_allocator)
         
         if len(shader.constant_buffers) > 0 {
-            strings.write_string(&cbuf_builder, "cbuffer cbuf : register(b0) {\n")
+            strings.write_string(&generated, "ByteAddressBuffer constant_buffer : register(t0, space1);\n\n")
+
+            strings.write_string(&generated, "struct IndexConstants {\n")
             
             for cb in shader.constant_buffers {
+                strings.write_string(&generated, "\tuint ")
+                strings.write_string(&generated, cb.name)
+                strings.write_string(&generated, "_index;\n")
+            }
+
+            strings.write_string(&generated, "};\n\n")
+            strings.write_string(&generated, "ConstantBuffer<IndexConstants> index_constants : register(b1, space0);\n\n");
+
+            for cb in shader.constant_buffers {
+                type_str := hlsl_type(cb.type)
+                strings.write_string(&generated, fmt.tprintf("%v get_%v() {{\n", type_str, cb.name))
+                index_name := fmt.tprintf("index_constants.%v_index", cb.name)
+
                 switch cb.type {
-                    case .None: continue
-                    case .Float4x4: {
-                        strings.write_string(&cbuf_builder, "    float4x4 ")
+                    case .None: break
+                    case .Float3: {
+                        strings.write_string(&generated, fmt.tprintf("\treturn asfloat(constant_buffer.Load3(%v));\n", index_name))
                     }
                     case .Float4: {
-                        strings.write_string(&cbuf_builder, "    float4 ")
+                        strings.write_string(&generated, fmt.tprintf("\treturn asfloat(constant_buffer.Load4(%v));\n", index_name))
                     }
-                    case .Float3: {
-                        strings.write_string(&cbuf_builder, "    float3 ")
+                    case .Float4x4: {
+                        strings.write_string(&generated, fmt.tprintf("\tfloat4 x = asfloat(constant_buffer.Load4(%v));\n", index_name))
+                        strings.write_string(&generated, fmt.tprintf("\tfloat4 y = asfloat(constant_buffer.Load4(%v + 16));\n", index_name))
+                        strings.write_string(&generated, fmt.tprintf("\tfloat4 z = asfloat(constant_buffer.Load4(%v + 32));\n", index_name))
+                        strings.write_string(&generated, fmt.tprintf("\tfloat4 w = asfloat(constant_buffer.Load4(%v + 48));\n", index_name))
+                        strings.write_string(&generated, "\treturn transpose(float4x4(x, y, z, w));\n")
                     }
                 }
 
-                strings.write_string(&cbuf_builder, cb.name)
-                strings.write_string(&cbuf_builder, ";\n")
+                strings.write_string(&generated, "}\n\n")
             }
-
-            strings.write_string(&cbuf_builder, "}\n\n")
         }
 
-        combined_code := strings.concatenate({strings.to_string(cbuf_builder), strings.to_string(code_builder)})
+        combined_code := strings.concatenate({strings.to_string(generated), strings.to_string(code_builder)})
         shader.code = strings.ptr_from_string(combined_code)
+
+        fmt.println(combined_code)
         shader.code_size = len(combined_code)
     }
 

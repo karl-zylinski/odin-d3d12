@@ -14,15 +14,10 @@ import rc "../render_commands"
 import rt "../render_types"
 import ss "../shader_system"
 import "core:intrinsics"
-import "core:crypto/md5"
-
-StrHash :: distinct u128
-
-hash :: proc(s: string) -> StrHash {
-    return transmute(StrHash)(md5.hash(s))
-}
+import "../base"
 
 NUM_RENDERTARGETS :: 2
+CONSTANT_BUFFER_UNINITIALIZED :: 0xFFFFFFFF
 
 BufferView :: union {
     d3d12.VERTEX_BUFFER_VIEW,
@@ -57,6 +52,7 @@ Pipeline :: struct {
     constant_buffer_map: rawptr,
     constant_buffer_bindless: ^d3d12.IResource,
     constant_buffer_bindless_map: rawptr,
+    constant_buffer_bindless_index: u32,
     command_allocator: ^d3d12.ICommandAllocator,
 }
 
@@ -64,15 +60,17 @@ None :: struct {
 }
 
 ShaderConstantBuffer :: struct {
-    offset: int,
-    name: StrHash,
+    // This is the index in the GPU-side constant_buffers array
+    index: u32,
+    name: base.StrHash,
+    type: ss.ConstantBufferType,
+    size: int,
 }
 
 Shader :: struct {
     pipeline_state: ^d3d12.IPipelineState,
     root_signature: ^d3d12.IRootSignature,
-    constant_buffers: [8]ShaderConstantBuffer,
-    num_constant_buffers: int,
+    constant_buffers: [dynamic]ShaderConstantBuffer,
 }
 
 ResourceData :: union {
@@ -203,6 +201,7 @@ destroy_resource :: proc(s: ^State, handle: rt.Handle) {
         case Shader: {
             r.pipeline_state->Release()
             r.root_signature->Release()
+            delete(r.constant_buffers)
             res^ = Resource{}
         }
         case Pipeline: {
@@ -265,6 +264,35 @@ submit_command_list :: proc(s: ^State, commands: ^rc.CommandList) {
                         table_handle2.ptr += u64(1 * s.device->GetDescriptorHandleIncrementSize(.CBV_SRV_UAV))
                         s.cmdlist->SetGraphicsRootDescriptorTable(1, table_handle2);
                         s.cmdlist->SetPipelineState(shader.pipeline_state)
+                    }
+                }
+            }
+            case rc.SetConstant: {
+                if shader, ok := &s.resources[c.shader].resource.(Shader); ok {
+                    if p, ok := &s.resources[c.pipeline].resource.(Pipeline); ok {
+                        n := c.name
+
+                        idx :u32= CONSTANT_BUFFER_UNINITIALIZED
+                        push_idx: u32
+                        sz := u32(max(constant_buffer_type_size(c.type), 16))
+
+                        for cb, arr_idx in &shader.constant_buffers {
+                            if cb.name == n {
+                                if cb.index == CONSTANT_BUFFER_UNINITIALIZED {
+                                    cb.index = p.constant_buffer_bindless_index
+                                    p.constant_buffer_bindless_index += sz
+                                }
+
+                                push_idx = u32(arr_idx)
+                                idx = cb.index
+                                break;
+                            }
+                        }
+
+                        if idx != CONSTANT_BUFFER_UNINITIALIZED {
+                            mem.copy(intrinsics.ptr_offset((^u8)(p.constant_buffer_bindless_map), idx), rawptr(&c.data[0]), int(sz))
+                            s.cmdlist->SetGraphicsRoot32BitConstants(1, 1, &idx, push_idx)
+                        }
                     }
                 }
             }
@@ -374,12 +402,12 @@ submit_command_list :: proc(s: ^State, commands: ^rc.CommandList) {
 
                 {
                     heap_props := d3d12.HEAP_PROPERTIES {
-                        Type = .UPLOAD,
+                        Type = .UPLOAD, 
                     }
 
                     resource_desc := d3d12.RESOURCE_DESC {
                         Dimension = .BUFFER,
-                        Width = 1024,
+                        Width = 10000000,
                         Height = 1,
                         DepthOrArraySize = 1,
                         MipLevels = 1,
@@ -499,14 +527,8 @@ submit_command_list :: proc(s: ^State, commands: ^rc.CommandList) {
                 hr = d3d_compiler.Compile(def.code, uint(def.code_size), nil, nil, nil, "PSMain", "ps_5_1", compile_flags, 0, &ps, &errors)
                 check(hr, s.info_queue, "Failed to compile pixel shader")
 
-                cb_offset := 0
-                for cb, index in def.constant_buffers {
-                    rd.constant_buffers[index] = {
-                        offset = cb_offset,
-                        name = hash(cb.name),
-                    }
-
-                    cb_offset += max(constant_buffer_type_size(cb.type), 16)
+                for cb, cb_idx in def.constant_buffers {
+                    append(&rd.constant_buffers, ShaderConstantBuffer{ type = cb.type, name = base.hash(cb.name), index = CONSTANT_BUFFER_UNINITIALIZED })
                 }
 
                   /* 
@@ -913,18 +935,7 @@ ri_to_d3d_state :: proc(ri_state: rc.ResourceState) -> d3d12.RESOURCE_STATES {
     return .COMMON
 }
 
-set_shader_constant_buffer :: proc(s: ^State, pipeline: rt.Handle, shader: rt.Handle, name: StrHash, v: ^$T) {
-    if p, ok := &s.resources[pipeline].resource.(Pipeline); ok {
-        if s, ok := &s.resources[shader].resource.(Shader); ok {
-            for cb in s.constant_buffers {
-                if (cb.name == name) {
-                    mem.copy(intrinsics.ptr_offset((^u8)(p.constant_buffer_bindless_map), cb.offset/* + int(p.frame_index * 96)*/), v, size_of(T))
-                    break
-                }
-            }
-        }
-    }
-}
+get_constant_buffer_index :: proc(s: ^State)
 
 update :: proc(s: ^State, pipeline: rt.Handle) {
     for res in &s.resources {
