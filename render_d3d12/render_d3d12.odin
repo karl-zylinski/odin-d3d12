@@ -645,7 +645,7 @@ submit_command_list :: proc(s: ^State, commands: ^rc.CommandList) {
                     BlendState = {
                         AlphaToCoverageEnable = false,
                         IndependentBlendEnable = false,
-                        RenderTarget = { 0 = default_blend_state, 1..7 = {} },
+                        RenderTarget = { 0 = default_blend_state, 1..=7 = {} },
                     },
                     SampleMask = 0xFFFFFFFF,
                     RasterizerState = {
@@ -673,7 +673,7 @@ submit_command_list :: proc(s: ^State, commands: ^rc.CommandList) {
                     },
                     PrimitiveTopologyType = .TRIANGLE,
                     NumRenderTargets = 1,
-                    RTVFormats = { 0 = .R8G8B8A8_UNORM, 1..7 = .UNKNOWN },
+                    RTVFormats = { 0 = .R8G8B8A8_UNORM, 1..=7 = .UNKNOWN },
                     DSVFormat = .D32_FLOAT,
                     SampleDesc = {
                         Count = 1,
@@ -955,7 +955,7 @@ check :: proc(res: d3d12.HRESULT, iq: ^d3d12.IInfoQueue, message: string) {
 
     if iq != nil {
         n := iq->GetNumStoredMessages()
-        for i in 0..n {
+        for i in 0..=n {
             msglen: d3d12.SIZE_T
             iq->GetMessageA(i, nil, &msglen)
 

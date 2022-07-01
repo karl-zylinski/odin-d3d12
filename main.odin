@@ -230,7 +230,7 @@ run :: proc() {
         camera_rot_y := lin.matrix4_rotate(camera_yaw, lin.Vector3f32{0, 1, 0})
         camera_rot := lin.mul(camera_rot_y, camera_rot_x)
 
-        for e: sdl2.Event; sdl2.PollEvent(&e) != 0; {
+        for e: sdl2.Event; sdl2.PollEvent(&e) != false; {
             #partial switch e.type {
                 case .QUIT:
                     break main_loop
