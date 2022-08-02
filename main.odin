@@ -329,7 +329,7 @@ run :: proc() {
 
         {
             model: hlsl.float4x4 = 1
-            //model[3][0] = math.cos(t*0.1)*10
+            model[3][0] = math.cos(t*0.1)*10
 
             mvp := lin.mul(hlsl.float4x4 {
                 1, 0, 0, 0,

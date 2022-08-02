@@ -146,7 +146,7 @@ load_shader :: proc(path: string) -> Shader {
 
     parse_cbuffers :: proc(code: string, shader: ^Shader) {
         cbuf_idx := 0
-        code_builder := strings.make_builder(allocator = context.temp_allocator)
+        code_builder := strings.builder_make(allocator = context.temp_allocator)
         for i := 0; i < len(code); i += 1 {
             if first_on_line(code, i) {
                 if string_at(code, i, CBufferMarker) {
@@ -160,7 +160,7 @@ load_shader :: proc(path: string) -> Shader {
                 }
             }
         }
-        generated := strings.make_builder(allocator = context.temp_allocator)
+        generated := strings.builder_make(allocator = context.temp_allocator)
         
         if len(shader.constant_buffers) > 0 {
             strings.write_string(&generated, "ByteAddressBuffer constant_buffer : register(t0, space1);\n\n")

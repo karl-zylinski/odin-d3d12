@@ -122,7 +122,7 @@ create :: proc(wx: i32, wy: i32, window_handle: dxgi.HWND) -> (s: State) {
             flags |= dxgi.CREATE_FACTORY_DEBUG
         }
 
-        hr = dxgi.CreateDXGIFactory2(flags, dxgi.IFactory4_UUID, &s.factory)
+        hr = dxgi.CreateDXGIFactory2(flags, dxgi.IFactory4_UUID, (^rawptr)(&s.factory))
         check(hr, s.info_queue, "Failed creating factory")
     }
 
