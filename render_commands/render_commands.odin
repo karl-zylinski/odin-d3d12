@@ -120,17 +120,18 @@ DestroyResource :: struct {
     handle: Handle,
 }
 
-SetPushConstants :: struct {
+UploadConstant :: struct {
     data: [256]u8,
     data_size: int,
+    pipeline: Handle,
+    constant: Handle,
 }
 
 SetConstant :: struct {
-    name: base.StrHash,
-    data: [256]u8,
-    type: shader_system.ConstantBufferType,
-    shader: Handle,
     pipeline: Handle,
+    shader: Handle,
+    name: base.StrHash,
+    constant: Handle,
 }
 
 Command :: union {
@@ -152,7 +153,7 @@ Command :: union {
     CreateShader,
     SetShader,
     DestroyResource,
-    SetPushConstants,
+    UploadConstant,
     SetConstant,
 }
 
@@ -235,12 +236,16 @@ create_shader :: proc(s: ^State, command_list: ^CommandList, shader: shader_syst
     return h
 }
 
-set_constant :: proc(s: ^State, command_list: ^CommandList, name: base.StrHash, type: shader_system.ConstantBufferType, data: ^$T, shader: Handle, pipeline: Handle) {
-    c := SetConstant {
-        name = name,
-        type = type,
-        shader = shader,
+create_constant :: proc(s: ^State) -> Handle {
+    h := get_handle(s)
+    return h
+}
+
+upload_constant :: proc(s: ^State, command_list: ^CommandList, pipeline: Handle, constant: Handle, data: ^$T) {
+    c := UploadConstant {
+        constant = constant,
         pipeline = pipeline,
+        data_size = size_of(data^),
     }
 
     mem.copy(rawptr(&c.data[0]), data, size_of(data^))

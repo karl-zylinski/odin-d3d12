@@ -52,7 +52,8 @@ Pipeline :: struct {
     constant_buffer_map: rawptr,
     constant_buffer_bindless: ^d3d12.IResource,
     constant_buffer_bindless_map: rawptr,
-    constant_buffer_bindless_index: u32,
+    constant_buffer_handle_map: map[rt.Handle]int,
+    constant_buffer_bindless_index: int,
     command_allocator: ^d3d12.ICommandAllocator,
 }
 
@@ -73,12 +74,17 @@ Shader :: struct {
     constant_buffers: [dynamic]ShaderConstantBuffer,
 }
 
+Constant :: struct {
+
+}
+
 ResourceData :: union {
     None,
     Pipeline,
     Fence,
     Buffer,
     Shader,
+    Constant,
 }
 
 Resource :: struct {
@@ -215,6 +221,7 @@ destroy_resource :: proc(s: ^State, handle: rt.Handle) {
             r.rtv_descriptor_heap->Release()
             r.cbv_descriptor_heap->Release()
             r.command_allocator->Release()
+            delete(r.constant_buffer_handle_map)
             res^ = Resource{}
         }
     }
@@ -249,9 +256,6 @@ submit_command_list :: proc(s: ^State, commands: ^rc.CommandList) {
             case rc.DestroyResource: {
                 destroy_resource(s, c.handle)
             }
-            case rc.SetPushConstants: {
-                s.cmdlist->SetGraphicsRoot32BitConstants(1, u32(c.data_size)/4, rawptr(&c.data[0]), 0)
-            }
             case rc.SetShader: {
                 if shader, ok := &s.resources[c.handle].resource.(Shader); ok {
                     if p, ok := &s.resources[c.pipeline].resource.(Pipeline); ok {
@@ -267,31 +271,30 @@ submit_command_list :: proc(s: ^State, commands: ^rc.CommandList) {
                     }
                 }
             }
+            case rc.UploadConstant: {
+                if p, ok := &s.resources[c.pipeline].resource.(Pipeline); ok {
+                    h := c.constant
+                    index, ok := p.constant_buffer_handle_map[h]
+
+                    if !ok {
+                        index = p.constant_buffer_bindless_index
+                        p.constant_buffer_bindless_index += c.data_size
+                        p.constant_buffer_handle_map[h] = index
+                    }
+
+                    mem.copy(intrinsics.ptr_offset((^u8)(p.constant_buffer_bindless_map), index), rawptr(&c.data[0]), c.data_size)
+                }
+            }
             case rc.SetConstant: {
                 if shader, ok := &s.resources[c.shader].resource.(Shader); ok {
                     if p, ok := &s.resources[c.pipeline].resource.(Pipeline); ok {
-                        n := c.name
-
-                        idx :u32= CONSTANT_BUFFER_UNINITIALIZED
-                        push_idx: u32
-                        sz := u32(max(constant_buffer_type_size(c.type), 16))
-
-                        for cb, arr_idx in &shader.constant_buffers {
-                            if cb.name == n {
-                                if cb.index == CONSTANT_BUFFER_UNINITIALIZED {
-                                    cb.index = p.constant_buffer_bindless_index
-                                    p.constant_buffer_bindless_index += sz
+                        if index, ok := p.constant_buffer_handle_map[c.constant]; ok {
+                            for cb, arr_idx in &shader.constant_buffers {
+                                if cb.name == c.name {
+                                    s.cmdlist->SetGraphicsRoot32BitConstants(1, 1, &index, u32(arr_idx))
+                                    break;
                                 }
-
-                                push_idx = u32(arr_idx)
-                                idx = cb.index
-                                break;
                             }
-                        }
-
-                        if idx != CONSTANT_BUFFER_UNINITIALIZED {
-                            mem.copy(intrinsics.ptr_offset((^u8)(p.constant_buffer_bindless_map), idx), rawptr(&c.data[0]), int(sz))
-                            s.cmdlist->SetGraphicsRoot32BitConstants(1, 1, &idx, push_idx)
                         }
                     }
                 }
@@ -494,6 +497,8 @@ submit_command_list :: proc(s: ^State, commands: ^rc.CommandList) {
                 check(hr, s.info_queue, "Failed to create command list")
                 hr = s.cmdlist->Close()
                 check(hr, s.info_queue, "Failed to close command list")
+
+                p.constant_buffer_handle_map = make(map[rt.Handle]int)
 
                 set_resource(s, c.handle, p)
             }

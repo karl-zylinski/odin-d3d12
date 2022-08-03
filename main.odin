@@ -222,6 +222,11 @@ run :: proc() {
     input: [4]bool
     t :f32= 0
 
+    color_const := rc.create_constant(&ri_state)
+    sun_pos_const := rc.create_constant(&ri_state)
+    mvp_const_1 := rc.create_constant(&ri_state)
+    mvp_const_2 := rc.create_constant(&ri_state)
+
     main_loop: for {
         t += 0.16
         render_d3d12.new_frame(&renderer_state, pipeline)
@@ -311,8 +316,23 @@ run :: proc() {
             pipeline = pipeline,
         })
 
-        rc.set_constant(&ri_state, &cmdlist, base.hash("sun_pos"), .Float3, &sun_pos, shader, pipeline);
-        rc.set_constant(&ri_state, &cmdlist, base.hash("color"), .Float4, &color, shader, pipeline);
+        rc.upload_constant(&ri_state, &cmdlist, pipeline, sun_pos_const, &sun_pos)
+
+        append(&cmdlist, rc.SetConstant {
+            pipeline = pipeline,
+            shader = shader,
+            name = base.hash("sun_pos"),
+            constant = sun_pos_const,
+        })
+
+        rc.upload_constant(&ri_state, &cmdlist, pipeline, color_const, &color)
+
+        append(&cmdlist, rc.SetConstant {
+            pipeline = pipeline,
+            shader = shader,
+            name = base.hash("color"),
+            constant = color_const,
+        })
 
         append(&cmdlist, rc.SetScissor {
             rect = { w = f32(wx), h = f32(wy), },
@@ -338,7 +358,14 @@ run :: proc() {
                 0, 0, 1.0, 0,
             }, lin.mul(view, model))
 
-            rc.set_constant(&ri_state, &cmdlist, base.hash("mvp"), .Float4x4, &mvp, shader, pipeline);
+            rc.upload_constant(&ri_state, &cmdlist, pipeline, mvp_const_1, &mvp)
+
+            append(&cmdlist, rc.SetConstant {
+                pipeline = pipeline,
+                shader = shader,
+                name = base.hash("mvp"),
+                constant = mvp_const_1,
+            })
 
             append(&cmdlist, rc.DrawCall {
                 vertex_buffer = ren.vertex_buffer,
@@ -349,6 +376,7 @@ run :: proc() {
         {
             model: hlsl.float4x4 = 1
             model[3][0] = 3
+            model[3][2] = math.sin(t*0.1)*10
 
             mvp := lin.mul(hlsl.float4x4 {
                 1, 0, 0, 0,
@@ -361,7 +389,14 @@ run :: proc() {
                 1, 0, 0, 1,
             }
 
-            rc.set_constant(&ri_state, &cmdlist, base.hash("mvp"), .Float4x4, &mvp, shader, pipeline);
+            rc.upload_constant(&ri_state, &cmdlist, pipeline, mvp_const_2, &mvp)
+
+            append(&cmdlist, rc.SetConstant {
+                pipeline = pipeline,
+                shader = shader,
+                name = base.hash("mvp"),
+                constant = mvp_const_2,
+            })
 
             append(&cmdlist, rc.DrawCall {
                 vertex_buffer = ren2.vertex_buffer,
