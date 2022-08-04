@@ -38,6 +38,11 @@ Fence :: struct {
     event: dxgi.HANDLE,
 }
 
+ConstantBufferMemory :: struct {
+    offset: int,
+    size: int,
+}
+
 Pipeline :: struct {
     swapchain: ^dxgi.ISwapChain3,
     queue: ^d3d12.ICommandQueue,
@@ -52,8 +57,9 @@ Pipeline :: struct {
     constant_buffer_map: rawptr,
     constant_buffer_bindless: ^d3d12.IResource,
     constant_buffer_bindless_map: rawptr,
-    constant_buffer_handle_map: map[rt.Handle]int,
+    constant_buffer_memory_info: map[rt.Handle]ConstantBufferMemory,
     constant_buffer_bindless_index: int,
+    constant_buffers_destroyed: [dynamic]ConstantBufferMemory,
     command_allocator: ^d3d12.ICommandAllocator,
 }
 
@@ -74,17 +80,13 @@ Shader :: struct {
     constant_buffers: [dynamic]ShaderConstantBuffer,
 }
 
-Constant :: struct {
-
-}
-
 ResourceData :: union {
     None,
     Pipeline,
     Fence,
     Buffer,
     Shader,
-    Constant,
+    ConstantBufferMemory,
 }
 
 Resource :: struct {
@@ -188,7 +190,10 @@ destroy :: proc(s: ^State) {
 destroy_resource :: proc(s: ^State, handle: rt.Handle) {
     res := &s.resources[handle]
 
-    #partial switch r in res.resource {
+    switch r in res.resource {
+        case None: {
+            res^ = Resource{}
+        }
         case Buffer: {
             if r.buffer != nil {
                 r.buffer->Release()
@@ -221,7 +226,16 @@ destroy_resource :: proc(s: ^State, handle: rt.Handle) {
             r.rtv_descriptor_heap->Release()
             r.cbv_descriptor_heap->Release()
             r.command_allocator->Release()
-            delete(r.constant_buffer_handle_map)
+            r.constant_buffer_bindless->Release()
+            delete(r.constant_buffer_memory_info)
+            delete(r.constant_buffers_destroyed)
+            res^ = Resource{}
+        }
+        case ConstantBufferMemory: {
+            fmt.println("ConstantBufferMemory in destroy_resource not yet implemented")
+            // Todo: Should we do something here? All these die along with the pipeline anyways. What if someone calls
+            // destroy_resource on a constant buffer handle. Should we maybe not use renderer handles for
+            // constant buffers?
             res^ = Resource{}
         }
     }
@@ -274,28 +288,40 @@ submit_command_list :: proc(s: ^State, commands: ^rc.CommandList) {
             case rc.UploadConstant: {
                 if p, ok := &s.resources[c.pipeline].resource.(Pipeline); ok {
                     h := c.constant
-                    index, ok := p.constant_buffer_handle_map[h]
+                    cb_info, ok := p.constant_buffer_memory_info[h]
 
                     if !ok {
-                        index = p.constant_buffer_bindless_index
+                        cb_info = {
+                            offset = p.constant_buffer_bindless_index,
+                            size = c.data_size
+                        }
                         p.constant_buffer_bindless_index += c.data_size
-                        p.constant_buffer_handle_map[h] = index
+                        p.constant_buffer_memory_info[h] = cb_info
                     }
 
-                    mem.copy(intrinsics.ptr_offset((^u8)(p.constant_buffer_bindless_map), index), rawptr(&c.data[0]), c.data_size)
+                    set_resource(s, h, cb_info)
+                    mem.copy(intrinsics.ptr_offset((^u8)(p.constant_buffer_bindless_map), cb_info.offset), rawptr(&c.data[0]), c.data_size)
                 }
             }
             case rc.SetConstant: {
                 if shader, ok := &s.resources[c.shader].resource.(Shader); ok {
                     if p, ok := &s.resources[c.pipeline].resource.(Pipeline); ok {
-                        if index, ok := p.constant_buffer_handle_map[c.constant]; ok {
+                        if cb_info, ok := p.constant_buffer_memory_info[c.constant]; ok {
                             for cb, arr_idx in &shader.constant_buffers {
                                 if cb.name == c.name {
-                                    s.cmdlist->SetGraphicsRoot32BitConstants(1, 1, &index, u32(arr_idx))
+                                    s.cmdlist->SetGraphicsRoot32BitConstants(1, 1, &cb_info.offset, u32(arr_idx))
                                     break;
                                 }
                             }
                         }
+                    }
+                }
+            }
+            case rc.DestroyConstant: {
+                if p, ok := &s.resources[c.pipeline].resource.(Pipeline); ok {
+                    if cb_info, ok := p.constant_buffer_memory_info[c.constant]; ok {
+                        append(&p.constant_buffers_destroyed, cb_info)
+                        delete_key(&p.constant_buffer_memory_info, c.constant)
                     }
                 }
             }
@@ -498,7 +524,7 @@ submit_command_list :: proc(s: ^State, commands: ^rc.CommandList) {
                 hr = s.cmdlist->Close()
                 check(hr, s.info_queue, "Failed to close command list")
 
-                p.constant_buffer_handle_map = make(map[rt.Handle]int)
+                p.constant_buffer_memory_info = make(map[rt.Handle]ConstantBufferMemory)
 
                 set_resource(s, c.handle, p)
             }

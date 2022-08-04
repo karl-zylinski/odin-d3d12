@@ -134,6 +134,11 @@ SetConstant :: struct {
     constant: Handle,
 }
 
+DestroyConstant :: struct {
+    constant: Handle,
+    pipeline: Handle,
+}
+
 Command :: union {
     Noop,
     Present,
@@ -155,6 +160,7 @@ Command :: union {
     DestroyResource,
     UploadConstant,
     SetConstant,
+    DestroyConstant,
 }
 
 CommandList :: distinct [dynamic]Command
@@ -250,6 +256,10 @@ upload_constant :: proc(s: ^State, command_list: ^CommandList, pipeline: Handle,
 
     mem.copy(rawptr(&c.data[0]), data, size_of(data^))
     append(command_list, c)
+}
+
+destroy_constant :: proc(s: ^State, command_list: ^CommandList, pipeline: Handle, constant: Handle) {
+    append(command_list, DestroyConstant { constant = constant, pipeline = pipeline })
 }
 
 State :: struct {

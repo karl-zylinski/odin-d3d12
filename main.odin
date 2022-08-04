@@ -18,7 +18,7 @@ import lin "core:math/linalg"
 import "shader_system"
 import "base"
 
-load_teapot :: proc(filename: string) -> ([dynamic]f32, [dynamic]u32, [dynamic]f32, [dynamic]u32)  {
+load_obj_model :: proc(filename: string) -> ([dynamic]f32, [dynamic]u32, [dynamic]f32, [dynamic]u32)  {
     f, err := os.open(filename)
     defer os.close(f)
     fs, _ := os.file_size(f)
@@ -131,10 +131,13 @@ load_teapot :: proc(filename: string) -> ([dynamic]f32, [dynamic]u32, [dynamic]f
 Renderable :: struct {
     vertex_buffer: render_types.Handle,
     index_buffer: render_types.Handle,
+    mvp_buffer: render_types.Handle,
+    position: hlsl.float4,
+    shader: render_types.Handle,
 }
 
-create_renderable :: proc(renderer_state: ^render_d3d12.State, rc_state: ^rc.State, filename: string) -> (ren: Renderable) {
-    vertices, indices, normals, normal_indices := load_teapot(filename)
+create_renderable :: proc(renderer_state: ^render_d3d12.State, rc_state: ^rc.State, filename: string, shader: render_types.Handle) -> (ren: Renderable) {
+    vertices, indices, normals, normal_indices := load_obj_model(filename)
     defer delete(vertices)
     defer delete(indices)
     defer delete(normals)
@@ -168,8 +171,40 @@ create_renderable :: proc(renderer_state: ^render_d3d12.State, rc_state: ^rc.Sta
     ren.index_buffer = rc.create_buffer(rc_state, &cmdlist, rc.IndexBufferDesc { stride = 4 }, rawptr(&indices[0]), index_buffer_size, .Dynamic)
     render_d3d12.submit_command_list(renderer_state, &cmdlist)
 
+    ren.mvp_buffer = rc.create_constant(rc_state)
+    ren.shader = shader
+
     return ren
 }
+
+render_renderable :: proc(rc_state: ^rc.State, pipeline: render_types.Handle, cmdlist: ^rc.CommandList, view: hlsl.float4x4, ren: ^Renderable) {
+    model: hlsl.float4x4 = 1
+    model[3].xyz = ren.position.xyz
+
+    mvp := lin.mul(hlsl.float4x4 {
+        1, 0, 0, 0,
+        0, 1, 0, 0,
+        0, 0, far/(far - near), (-far * near)/(far - near),
+        0, 0, 1.0, 0,
+    }, lin.mul(view, model))
+
+    rc.upload_constant(rc_state, cmdlist, pipeline, ren.mvp_buffer, &mvp)
+
+    append(cmdlist, rc.SetConstant {
+        pipeline = pipeline,
+        shader = ren.shader,
+        name = base.hash("mvp"),
+        constant = ren.mvp_buffer,
+    })
+
+    append(cmdlist, rc.DrawCall {
+        vertex_buffer = ren.vertex_buffer,
+        index_buffer = ren.index_buffer,
+    })
+}
+
+near :: f32(0.01)
+far :: f32(100)
 
 run :: proc() {
     // Init SDL and create window
@@ -213,8 +248,8 @@ run :: proc() {
         render_d3d12.submit_command_list(&renderer_state, &cmdlist)
     }
 
-    ren := create_renderable(&renderer_state, &ri_state, "teapot.obj")
-    ren2 := create_renderable(&renderer_state, &ri_state, "car.obj")
+    ren := create_renderable(&renderer_state, &ri_state, "teapot.obj", shader)
+    ren2 := create_renderable(&renderer_state, &ri_state, "car.obj", shader)
 
     camera_pos := hlsl.float3 { 0, 0, -1 }
     camera_yaw: f32 = 0
@@ -224,8 +259,6 @@ run :: proc() {
 
     color_const := rc.create_constant(&ri_state)
     sun_pos_const := rc.create_constant(&ri_state)
-    mvp_const_1 := rc.create_constant(&ri_state)
-    mvp_const_2 := rc.create_constant(&ri_state)
 
     main_loop: for {
         t += 0.16
@@ -294,9 +327,6 @@ run :: proc() {
         camera_trans[3].xyz = ([3]f32)(camera_pos)
         view: hlsl.float4x4 = hlsl.inverse(lin.mul(camera_trans, hlsl.float4x4(camera_rot)))
 
-        near: f32 = 0.01
-        far: f32 = 100
-
         color := hlsl.float4 {
             1, 0, 0, 1,
         }
@@ -348,60 +378,14 @@ run :: proc() {
         append(&cmdlist, rc.SetRenderTarget { render_target = { pipeline = pipeline, }, })
 
         {
-            model: hlsl.float4x4 = 1
-            model[3][0] = math.cos(t*0.1)*10
-
-            mvp := lin.mul(hlsl.float4x4 {
-                1, 0, 0, 0,
-                0, 1, 0, 0,
-                0, 0, far/(far - near), (-far * near)/(far - near),
-                0, 0, 1.0, 0,
-            }, lin.mul(view, model))
-
-            rc.upload_constant(&ri_state, &cmdlist, pipeline, mvp_const_1, &mvp)
-
-            append(&cmdlist, rc.SetConstant {
-                pipeline = pipeline,
-                shader = shader,
-                name = base.hash("mvp"),
-                constant = mvp_const_1,
-            })
-
-            append(&cmdlist, rc.DrawCall {
-                vertex_buffer = ren.vertex_buffer,
-                index_buffer = ren.index_buffer,
-            })
+            ren.position.x = math.cos(t*0.1)*10
+            render_renderable(&ri_state, pipeline, &cmdlist, view, &ren)
         }
 
         {
-            model: hlsl.float4x4 = 1
-            model[3][0] = 3
-            model[3][2] = math.sin(t*0.1)*10
-
-            mvp := lin.mul(hlsl.float4x4 {
-                1, 0, 0, 0,
-                0, 1, 0, 0,
-                0, 0, far/(far - near), (-far * near)/(far - near),
-                0, 0, 1.0, 0,
-            }, lin.mul(view, model))
-
-            color := hlsl.float4 {
-                1, 0, 0, 1,
-            }
-
-            rc.upload_constant(&ri_state, &cmdlist, pipeline, mvp_const_2, &mvp)
-
-            append(&cmdlist, rc.SetConstant {
-                pipeline = pipeline,
-                shader = shader,
-                name = base.hash("mvp"),
-                constant = mvp_const_2,
-            })
-
-            append(&cmdlist, rc.DrawCall {
-                vertex_buffer = ren2.vertex_buffer,
-                index_buffer = ren2.index_buffer,
-            })
+            ren2.position.x = 3
+            ren2.position.z = math.sin(t*0.1)*10
+            render_renderable(&ri_state, pipeline, &cmdlist, view, &ren2)
         }
 
         append(&cmdlist, rc.ResourceTransition {
@@ -421,6 +405,12 @@ run :: proc() {
         rc.destroy_resource(&ri_state, &cmdlist, fence)
         rc.destroy_resource(&ri_state, &cmdlist, ren.vertex_buffer)
         rc.destroy_resource(&ri_state, &cmdlist, ren.index_buffer)
+        rc.destroy_resource(&ri_state, &cmdlist, ren2.vertex_buffer)
+        rc.destroy_resource(&ri_state, &cmdlist, ren2.index_buffer)
+        rc.destroy_resource(&ri_state, &cmdlist, color_const)
+        rc.destroy_resource(&ri_state, &cmdlist, sun_pos_const)
+        rc.destroy_resource(&ri_state, &cmdlist, ren.mvp_buffer)
+        rc.destroy_resource(&ri_state, &cmdlist, ren2.mvp_buffer)
         rc.destroy_resource(&ri_state, &cmdlist, pipeline)
         render_d3d12.submit_command_list(&renderer_state, &cmdlist)
     }
