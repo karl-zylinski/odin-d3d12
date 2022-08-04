@@ -966,8 +966,6 @@ ri_to_d3d_state :: proc(ri_state: rc.ResourceState) -> d3d12.RESOURCE_STATES {
     return .COMMON
 }
 
-get_constant_buffer_index :: proc(s: ^State)
-
 update :: proc(s: ^State, pipeline: rt.Handle) {
     for res in &s.resources {
         if b, ok := &res.resource.(Buffer); ok {
