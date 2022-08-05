@@ -517,6 +517,15 @@ submit_command_list :: proc(s: ^State, commands: ^rc.CommandList) {
                 check(hr, s.info_queue, "Failed to compile vertex shader")
 
                 hr = d3d_compiler.Compile(def.code, uint(def.code_size), nil, nil, nil, "PSMain", "ps_5_1", compile_flags, 0, &ps, &errors)
+
+                errors_sz = errors != nil ? errors->GetBufferSize() : 0
+
+                if errors_sz > 0 {
+                    errors_ptr := errors->GetBufferPointer()
+                    error_str := strings.string_from_ptr((^u8)(errors_ptr), int(errors_sz))
+                    fmt.println(error_str)
+                }
+
                 check(hr, s.info_queue, "Failed to compile pixel shader")
 
                 for cb, cb_idx in def.constant_buffers {
@@ -545,7 +554,7 @@ submit_command_list :: proc(s: ^State, commands: ^rc.CommandList) {
 
                         {
                             RangeType = .SRV,
-                            NumDescriptors = 1,
+                            NumDescriptors = 10,
                             BaseShaderRegister = 0,
                             RegisterSpace = 1,
                         },
@@ -587,14 +596,38 @@ submit_command_list :: proc(s: ^State, commands: ^rc.CommandList) {
                         Num32BitValues = 16,
                     }
 
+                    // create a static sampler
+                    sampler := d3d12.STATIC_SAMPLER_DESC {
+                        Filter = .MIN_MAG_MIP_POINT,
+                        AddressU = .BORDER,
+                        AddressV = .BORDER,
+                        AddressW = .BORDER,
+                        MipLODBias = 0,
+                        MaxAnisotropy = 0,
+                        ComparisonFunc = .NEVER,
+                        BorderColor = .TRANSPARENT_BLACK,
+                        MinLOD = 0,
+                        MaxLOD = d3d12.FLOAT32_MAX,
+                        ShaderRegister = 0,
+                        RegisterSpace = 0,
+                        ShaderVisibility = .PIXEL,
+                    }
+
                     vdesc.Desc_1_0 = {
                         NumParameters = u32(len(root_parameters)),
                         pParameters = &root_parameters[0],
                         Flags = .ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT,
+                        NumStaticSamplers = 1,
+                        pStaticSamplers = &sampler,
                     }
 
                     serialized_desc: ^d3d12.IBlob
-                    hr = d3d12.SerializeVersionedRootSignature(&vdesc, &serialized_desc, nil)
+                    ser_error: ^d3d12.IBlob
+                    hr = d3d12.SerializeVersionedRootSignature(&vdesc, &serialized_desc, &ser_error)
+
+                    if ser_error != nil {
+                        fmt.println(strings.string_from_ptr((^u8)(ser_error->GetBufferPointer()), int(ser_error->GetBufferSize())))
+                    }
                     check(hr, s.info_queue, "Failed to serialize root signature")
                     hr = s.device->CreateRootSignature(0, serialized_desc->GetBufferPointer(), serialized_desc->GetBufferSize(), d3d12.IRootSignature_UUID, (^rawptr)(&rd.root_signature))
                     check(hr, s.info_queue, "Failed creating root signature")

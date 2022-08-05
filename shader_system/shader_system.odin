@@ -233,7 +233,7 @@ load_shader :: proc(path: string) -> Shader {
         }
 
         if len(shader.textures_2d) > 0 {
-            strings.write_string(&generated, "Texture2D<float4> bindless_textures[] : register(t0, space1);\n\n")
+            strings.write_string(&generated, "Texture2D<float4> bindless_textures[10] : register(t0, space1);\n\n")
 
             strings.write_string(&generated, "struct IndexTextures {\n")
             
