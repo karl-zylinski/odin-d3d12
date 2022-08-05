@@ -17,10 +17,15 @@ ConstantBuffer :: struct {
     updatable: bool,
 }
 
+Texture2D :: struct {
+    name: string,
+}
+
 Shader :: struct {
     code: rawptr,
     code_size: int,
     constant_buffers: []ConstantBuffer,
+    textures_2d: []Texture2D,
 }
 
 load_shader :: proc(path: string) -> Shader {
@@ -52,12 +57,13 @@ load_shader :: proc(path: string) -> Shader {
     }
 
     CBufferMarker :: "#cbuffer"
+    Texture2DMarker :: "#texture2d"
 
-    count_cbuffers :: proc(code: string) -> int {
+    count_occurance :: proc(code: string, str: string, beginning_of_line: bool) -> int {
         n: int
         for c, i in code {
-            if first_on_line(code, i) {
-                if string_at(code, i, CBufferMarker) {
+            if !beginning_of_line || first_on_line(code, i) {
+                if string_at(code, i, str) {
                     n += 1
                 }
             }
@@ -69,7 +75,7 @@ load_shader :: proc(path: string) -> Shader {
         i := i_in
         start := i
 
-        for code[i] != ' ' && code[i] != '\n' && code[i] != '\t' && i < len(code) {
+        for code[i] != ' ' && code[i] != '\r' && code[i] != '\n' && code[i] != '\t' && i < len(code) {
             i += 1
         }
 
@@ -144,14 +150,37 @@ load_shader :: proc(path: string) -> Shader {
         return ""
     }
 
+    parse_texture2d :: proc(code: string, i_in: int) -> (Texture2D, int) {
+        i := i_in
+        t: Texture2D
+
+        if !string_at(code, i, Texture2DMarker) {
+            return t, i
+        }
+
+        i += len(Texture2DMarker)
+        i = skip_whitespace(code, i)
+
+        name: string
+        name, i = get_word(code, i)
+        t.name = strings.clone(name)
+        i = skip_whitespace(code, i)
+
+        return t, i
+    }
+
     parse_cbuffers :: proc(code: string, shader: ^Shader) {
         cbuf_idx := 0
+        tex2d_idx := 0
         code_builder := strings.builder_make(allocator = context.temp_allocator)
         for i := 0; i < len(code); i += 1 {
             if first_on_line(code, i) {
                 if string_at(code, i, CBufferMarker) {
                     shader.constant_buffers[cbuf_idx], i = parse_cbuffer(code, i)
                     cbuf_idx += 1
+                } else if string_at(code, i, Texture2DMarker) {
+                    shader.textures_2d[tex2d_idx], i = parse_texture2d(code, i)
+                    tex2d_idx += 1
                 } else {
                     line: string
                     line, i = get_line(code, i)
@@ -163,7 +192,7 @@ load_shader :: proc(path: string) -> Shader {
         generated := strings.builder_make(allocator = context.temp_allocator)
         
         if len(shader.constant_buffers) > 0 {
-            strings.write_string(&generated, "ByteAddressBuffer constant_buffer : register(t0, space1);\n\n")
+            strings.write_string(&generated, "ByteAddressBuffer constant_buffer : register(t0, space0);\n\n")
 
             strings.write_string(&generated, "struct IndexConstants {\n")
             
@@ -200,6 +229,29 @@ load_shader :: proc(path: string) -> Shader {
 
                 strings.write_string(&generated, "}\n\n")
             }
+
+        }
+
+        if len(shader.textures_2d) > 0 {
+            strings.write_string(&generated, "Texture2D<float4> bindless_textures[] : register(t0, space2);\n\n")
+
+            strings.write_string(&generated, "struct IndexTextures {\n")
+            
+            for t in shader.textures_2d {
+                strings.write_string(&generated, "\tuint ")
+                strings.write_string(&generated, t.name)
+                strings.write_string(&generated, "_index;\n")
+            }
+
+            strings.write_string(&generated, "};\n\n")
+            strings.write_string(&generated, "ConstantBuffer<IndexTextures> index_textures : register(b1, space1);\n\n");
+
+            for t in shader.textures_2d {
+                strings.write_string(&generated, fmt.tprintf("Texture2D<float4> get_%v() {{\n", t.name))
+                index_name := fmt.tprintf("index_textures.%v_index", t.name)
+                strings.write_string(&generated, fmt.tprintf("\treturn bindless_textures[%v];\n", index_name))
+                strings.write_string(&generated, "}\n\n")
+            }
         }
 
         combined_code := strings.concatenate({strings.to_string(generated), strings.to_string(code_builder)})
@@ -210,10 +262,9 @@ load_shader :: proc(path: string) -> Shader {
     }
 
     parse_shader :: proc(code: string) -> Shader {
-        num_cbuffers := count_cbuffers(code)
-
         s: Shader = {
-            constant_buffers = make([]ConstantBuffer, num_cbuffers),
+            constant_buffers = make([]ConstantBuffer, count_occurance(code, CBufferMarker, true)),
+            textures_2d = make([]Texture2D, count_occurance(code, Texture2DMarker, true)),
         }
 
         parse_cbuffers(code, &s)

@@ -53,8 +53,6 @@ Pipeline :: struct {
     rtv_descriptor_heap: ^d3d12.IDescriptorHeap,
     cbv_descriptor_heap: ^d3d12.IDescriptorHeap,
     mvp: hlsl.float4x4,
-    constant_buffer: ^d3d12.IResource,
-    constant_buffer_map: rawptr,
     constant_buffer_bindless: ^d3d12.IResource,
     constant_buffer_bindless_map: rawptr,
     constant_buffer_memory_info: map[rt.Handle]ConstantBufferMemory,
@@ -216,7 +214,6 @@ destroy_resource :: proc(s: ^State, handle: rt.Handle) {
             res^ = Resource{}
         }
         case Pipeline: {
-            r.constant_buffer->Unmap(0, nil)
             r.swapchain->Release()
             r.queue->Release()
             r.depth->Release()
@@ -276,11 +273,7 @@ submit_command_list :: proc(s: ^State, commands: ^rc.CommandList) {
                         s.cmdlist->SetGraphicsRootSignature(shader.root_signature)
                         table_handle: d3d12.GPU_DESCRIPTOR_HANDLE
                         p.cbv_descriptor_heap->GetGPUDescriptorHandleForHeapStart(&table_handle)
-                        s.cmdlist->SetGraphicsRootDescriptorTable(0, table_handle);
-                        table_handle2: d3d12.GPU_DESCRIPTOR_HANDLE
-                        p.cbv_descriptor_heap->GetGPUDescriptorHandleForHeapStart(&table_handle2)
-                        table_handle2.ptr += u64(1 * s.device->GetDescriptorHandleIncrementSize(.CBV_SRV_UAV))
-                        s.cmdlist->SetGraphicsRootDescriptorTable(1, table_handle2);
+                        s.cmdlist->SetGraphicsRootDescriptorTable(0, table_handle)
                         s.cmdlist->SetPipelineState(shader.pipeline_state)
                     }
                 }
@@ -400,37 +393,6 @@ submit_command_list :: proc(s: ^State, commands: ^rc.CommandList) {
 
                 {
                     heap_props := d3d12.HEAP_PROPERTIES {
-                        Type = .UPLOAD,
-                    }
-
-                    resource_desc := d3d12.RESOURCE_DESC {
-                        Dimension = .BUFFER,
-                        Width = 256,
-                        Height = 1,
-                        DepthOrArraySize = 1,
-                        MipLevels = 1,
-                        SampleDesc = { Count = 1, Quality = 0, },
-                        Layout = .ROW_MAJOR,
-                    }
-
-                    hr = s.device->CreateCommittedResource(&heap_props, .NONE, &resource_desc, .GENERIC_READ, nil, d3d12.IResource_UUID, (^rawptr)(&p.constant_buffer))
-                    check(hr, s.info_queue, "Failed creating commited resource")
-
-                    r: d3d12.RANGE = {}
-                    p.constant_buffer->Map(0, &r, (^rawptr)(&p.constant_buffer_map))
-
-                    cbv_desc := d3d12.CONSTANT_BUFFER_VIEW_DESC {
-                        SizeInBytes = 256,
-                        BufferLocation = p.constant_buffer->GetGPUVirtualAddress(),
-                    }
-
-                    mat_handle: d3d12.CPU_DESCRIPTOR_HANDLE
-                    p.cbv_descriptor_heap->GetCPUDescriptorHandleForHeapStart(&mat_handle)
-                    s.device->CreateConstantBufferView(&cbv_desc, mat_handle)
-                }
-
-                {
-                    heap_props := d3d12.HEAP_PROPERTIES {
                         Type = .UPLOAD, 
                     }
 
@@ -457,7 +419,7 @@ submit_command_list :: proc(s: ^State, commands: ^rc.CommandList) {
 
                     res_handle: d3d12.CPU_DESCRIPTOR_HANDLE
                     p.cbv_descriptor_heap->GetCPUDescriptorHandleForHeapStart(&res_handle)
-                    res_handle.ptr += uint(1 * s.device->GetDescriptorHandleIncrementSize(.CBV_SRV_UAV))
+                    //res_handle.ptr += uint(0 * s.device->GetDescriptorHandleIncrementSize(.CBV_SRV_UAV))
                     s.device->CreateConstantBufferView(&cbv_desc, res_handle)
                 }
 
@@ -579,15 +541,27 @@ submit_command_list :: proc(s: ^State, commands: ^rc.CommandList) {
                             NumDescriptors = 1,
                             BaseShaderRegister = 0,
                             RegisterSpace = 0,
-                            OffsetInDescriptorsFromTableStart = d3d12.DESCRIPTOR_RANGE_OFFSET_APPEND,
                         },
-                        {
-                            RangeType = .SRV,
+                   /*     {
+                            RangeType = .CBV,
                             NumDescriptors = 1,
                             BaseShaderRegister = 0,
                             RegisterSpace = 1,
                             OffsetInDescriptorsFromTableStart = d3d12.DESCRIPTOR_RANGE_OFFSET_APPEND,
+                        },*/
+                        {
+                            RangeType = .SRV,
+                            NumDescriptors = 1,
+                            BaseShaderRegister = 0,
+                            RegisterSpace = 0,
                         },
+                     /*   {
+                            RangeType = .SRV,
+                            NumDescriptors = 1,
+                            BaseShaderRegister = 0,
+                            RegisterSpace = 2,
+                            OffsetInDescriptorsFromTableStart = d3d12.DESCRIPTOR_RANGE_OFFSET_APPEND,
+                        },*/
                     }
 
                     descriptor_table: d3d12.ROOT_DESCRIPTOR_TABLE = {
@@ -608,6 +582,10 @@ submit_command_list :: proc(s: ^State, commands: ^rc.CommandList) {
                             ParameterType = ._32BIT_CONSTANTS,
                             ShaderVisibility = .ALL,
                         },
+                   /*     {
+                            ParameterType = ._32BIT_CONSTANTS,
+                            ShaderVisibility = .ALL,
+                        },*/
                     }
 
                     root_parameters[0].DescriptorTable = descriptor_table
@@ -616,6 +594,11 @@ submit_command_list :: proc(s: ^State, commands: ^rc.CommandList) {
                         RegisterSpace = 0, 
                         Num32BitValues = 32,
                     }
+                /*    root_parameters[2].Constants = {
+                        ShaderRegister = 1,
+                        RegisterSpace = 1, 
+                        Num32BitValues = 32,
+                    }*/
 
                     vdesc.Desc_1_0 = {
                         NumParameters = 2,

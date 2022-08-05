@@ -378,14 +378,14 @@ run :: proc() {
         append(&cmdlist, rc.SetRenderTarget { render_target = { pipeline = pipeline, }, })
 
         {
-            ren.position.x = math.cos(t*0.1)*10
+    //        ren.position.x = math.cos(t*0.1)*10
             render_renderable(&ri_state, pipeline, &cmdlist, view, &ren)
         }
 
         {
-            ren2.position.x = 3
+      /*      ren2.position.x = 3
             ren2.position.z = math.sin(t*0.1)*10
-            render_renderable(&ri_state, pipeline, &cmdlist, view, &ren2)
+            render_renderable(&ri_state, pipeline, &cmdlist, view, &ren2)*/
         }
 
         append(&cmdlist, rc.ResourceTransition {
