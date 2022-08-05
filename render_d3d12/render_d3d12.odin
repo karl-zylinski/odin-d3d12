@@ -419,7 +419,6 @@ submit_command_list :: proc(s: ^State, commands: ^rc.CommandList) {
 
                     res_handle: d3d12.CPU_DESCRIPTOR_HANDLE
                     p.cbv_descriptor_heap->GetCPUDescriptorHandleForHeapStart(&res_handle)
-                    //res_handle.ptr += uint(0 * s.device->GetDescriptorHandleIncrementSize(.CBV_SRV_UAV))
                     s.device->CreateConstantBufferView(&cbv_desc, res_handle)
                 }
 
@@ -536,32 +535,20 @@ submit_command_list :: proc(s: ^State, commands: ^rc.CommandList) {
                     // create a descriptor range (descriptor table) and fill it out
                     // this is a range of descriptors inside a descriptor heap
                     descriptor_table_ranges: []d3d12.DESCRIPTOR_RANGE = {
+
                         {
-                            RangeType = .CBV,
+                            RangeType = .SRV,
                             NumDescriptors = 1,
                             BaseShaderRegister = 0,
                             RegisterSpace = 0,
                         },
-                   /*     {
-                            RangeType = .CBV,
+
+                        {
+                            RangeType = .SRV,
                             NumDescriptors = 1,
                             BaseShaderRegister = 0,
                             RegisterSpace = 1,
-                            OffsetInDescriptorsFromTableStart = d3d12.DESCRIPTOR_RANGE_OFFSET_APPEND,
-                        },*/
-                        {
-                            RangeType = .SRV,
-                            NumDescriptors = 1,
-                            BaseShaderRegister = 0,
-                            RegisterSpace = 0,
                         },
-                     /*   {
-                            RangeType = .SRV,
-                            NumDescriptors = 1,
-                            BaseShaderRegister = 0,
-                            RegisterSpace = 2,
-                            OffsetInDescriptorsFromTableStart = d3d12.DESCRIPTOR_RANGE_OFFSET_APPEND,
-                        },*/
                     }
 
                     descriptor_table: d3d12.ROOT_DESCRIPTOR_TABLE = {
@@ -582,26 +569,26 @@ submit_command_list :: proc(s: ^State, commands: ^rc.CommandList) {
                             ParameterType = ._32BIT_CONSTANTS,
                             ShaderVisibility = .ALL,
                         },
-                   /*     {
+                        {
                             ParameterType = ._32BIT_CONSTANTS,
                             ShaderVisibility = .ALL,
-                        },*/
+                        },
                     }
 
                     root_parameters[0].DescriptorTable = descriptor_table
                     root_parameters[1].Constants = {
-                        ShaderRegister = 1,
+                        ShaderRegister = 0,
                         RegisterSpace = 0, 
                         Num32BitValues = 32,
                     }
-                /*    root_parameters[2].Constants = {
-                        ShaderRegister = 1,
+                    root_parameters[2].Constants = {
+                        ShaderRegister = 0,
                         RegisterSpace = 1, 
-                        Num32BitValues = 32,
-                    }*/
+                        Num32BitValues = 16,
+                    }
 
                     vdesc.Desc_1_0 = {
-                        NumParameters = 2,
+                        NumParameters = u32(len(root_parameters)),
                         pParameters = &root_parameters[0],
                         Flags = .ALLOW_INPUT_ASSEMBLER_INPUT_LAYOUT,
                     }
@@ -625,6 +612,12 @@ submit_command_list :: proc(s: ^State, commands: ^rc.CommandList) {
                         SemanticName = "NORMAL", 
                         Format = .R32G32B32_FLOAT, 
                         AlignedByteOffset = size_of(f32) * 3, 
+                        InputSlotClass = .PER_VERTEX_DATA, 
+                    },
+                    {   
+                        SemanticName = "TEXCOORD", 
+                        Format = .R32G32_FLOAT, 
+                        AlignedByteOffset = size_of(f32) * 6, 
                         InputSlotClass = .PER_VERTEX_DATA, 
                     },
                 }

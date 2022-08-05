@@ -203,7 +203,7 @@ load_shader :: proc(path: string) -> Shader {
             }
 
             strings.write_string(&generated, "};\n\n")
-            strings.write_string(&generated, "ConstantBuffer<IndexConstants> index_constants : register(b1, space0);\n\n");
+            strings.write_string(&generated, "ConstantBuffer<IndexConstants> index_constants : register(b0, space0);\n\n");
 
             for cb in shader.constant_buffers {
                 type_str := hlsl_type(cb.type)
@@ -233,7 +233,7 @@ load_shader :: proc(path: string) -> Shader {
         }
 
         if len(shader.textures_2d) > 0 {
-            strings.write_string(&generated, "Texture2D<float4> bindless_textures[] : register(t0, space2);\n\n")
+            strings.write_string(&generated, "Texture2D<float4> bindless_textures[] : register(t0, space1);\n\n")
 
             strings.write_string(&generated, "struct IndexTextures {\n")
             
@@ -244,7 +244,7 @@ load_shader :: proc(path: string) -> Shader {
             }
 
             strings.write_string(&generated, "};\n\n")
-            strings.write_string(&generated, "ConstantBuffer<IndexTextures> index_textures : register(b1, space1);\n\n");
+            strings.write_string(&generated, "ConstantBuffer<IndexTextures> index_textures : register(b0, space1);\n\n");
 
             for t in shader.textures_2d {
                 strings.write_string(&generated, fmt.tprintf("Texture2D<float4> get_%v() {{\n", t.name))

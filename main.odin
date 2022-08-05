@@ -18,7 +18,7 @@ import lin "core:math/linalg"
 import "shader_system"
 import "base"
 
-load_obj_model :: proc(filename: string) -> ([dynamic]f32, [dynamic]u32, [dynamic]f32, [dynamic]u32)  {
+load_obj_model :: proc(filename: string) -> ([dynamic]f32, [dynamic]u32, [dynamic]f32, [dynamic]u32, [dynamic]f32, [dynamic]u32)  {
     f, err := os.open(filename)
     defer os.close(f)
     fs, _ := os.file_size(f)
@@ -28,8 +28,10 @@ load_obj_model :: proc(filename: string) -> ([dynamic]f32, [dynamic]u32, [dynami
     teapot := strings.string_from_ptr(&teapot_bytes[0], int(fs))
     out: [dynamic]f32
     normals_out: [dynamic]f32
+    texcoords_out: [dynamic]f32
     indices_out: [dynamic]u32
     normal_indices_out: [dynamic]u32
+    texcoord_indices_out: [dynamic]u32
 
     parse_comment :: proc(teapot: string, i_in: int) -> int {
         i := i_in
@@ -78,7 +80,30 @@ load_obj_model :: proc(filename: string) -> ([dynamic]f32, [dynamic]u32, [dynami
         return i
     }
 
-    parse_face_index :: proc(teapot: string, i_in: int) -> (int, u32, u32) {
+    parse_texcoord :: proc(teapot: string, i_in: int, out: ^[dynamic]f32) -> int {
+        i := skip_whitespace(teapot, i_in)
+        n0, n1: f32
+        i, n0 = parse_number(teapot, i)
+        i = skip_whitespace(teapot, i)
+        i, n1 = parse_number(teapot, i)
+        append(out, n0, n1)
+        return i
+    }
+
+    parse_face_index :: proc(teapot: string, i_in: int) -> (int, u32, u32, u32) {
+        num_slashes := 0
+
+        {
+            slashi := i_in
+            for teapot[slashi] != ' ' && teapot[slashi] != '\n' {
+                if teapot[slashi] == '/' {
+                    num_slashes += 1
+                }
+
+                slashi += 1
+            }
+        }
+
         i := i_in
         start := i
 
@@ -87,7 +112,24 @@ load_obj_model :: proc(filename: string) -> ([dynamic]f32, [dynamic]u32, [dynami
         }
 
         ii, _ := strconv.parse_int(teapot[start:i])
-        i += 2
+        i += 1
+
+        if num_slashes == 0 {
+            return i, u32(ii - 1), 0, 0
+        }
+
+        start = i
+
+        for teapot[i] != '/' && teapot[i] != ' ' && teapot[i] != '\n' && teapot[i] != '\t' {
+            i += 1
+        }
+
+        ni, _ := strconv.parse_int(teapot[start:i])
+        i += 1
+
+        if num_slashes == 1 {
+            return i, u32(ii - 1), u32(ni - 1), 0
+        }
 
         start = i
 
@@ -95,21 +137,41 @@ load_obj_model :: proc(filename: string) -> ([dynamic]f32, [dynamic]u32, [dynami
             i += 1
         }
 
-        ni, _ := strconv.parse_int(teapot[start:i])
-
-        return i, u32(ii - 1), u32(ni - 1)
+        ti, _ := strconv.parse_int(teapot[start:i])
+        return i, u32(ii - 1), u32(ni - 1), u32(ti - 1)
     }
 
-    parse_face :: proc(teapot: string, i_in: int, out: ^[dynamic]u32, normal_indices_out: ^[dynamic]u32) -> int {
+    parse_face :: proc(teapot: string, i_in: int, out: ^[dynamic]u32, normal_indices_out: ^[dynamic]u32, texcoord_indices_out: ^[dynamic]u32) -> int {
+        num_slashes := 0
+
+        {
+            slashi := i_in
+            for teapot[slashi] != '\n' {
+                if teapot[slashi] == '/' {
+                    num_slashes += 1
+                }
+
+                slashi += 1
+            }
+        }
+
         i := skip_whitespace(teapot, i_in + 1)
-        n0, n1, n2, in0, in1, in2: u32
-        i, n0, in0 = parse_face_index(teapot, i)
+        n0, n1, n2, in0, in1, in2, t0, t1, t2: u32
+        i, n0, in0, t0 = parse_face_index(teapot, i)
         i = skip_whitespace(teapot, i)
-        i, n1, in1 = parse_face_index(teapot, i)
+        i, n1, in1, t1 = parse_face_index(teapot, i)
         i = skip_whitespace(teapot, i)
-        i, n2, in2 = parse_face_index(teapot, i)
+        i, n2, in2, t2 = parse_face_index(teapot, i)
         append(out, n0, n1, n2)
-        append(normal_indices_out, in0, in1, in2)
+
+        if num_slashes >= 3 {
+            append(normal_indices_out, in0, in1, in2)
+        }
+
+        if num_slashes >= 6 {
+            append(texcoord_indices_out, t0, t1, t2)
+        }
+
         return i
     }
 
@@ -120,12 +182,14 @@ load_obj_model :: proc(filename: string) -> ([dynamic]f32, [dynamic]u32, [dynami
                 i = parse_vertex(teapot, i + 1, &out)
             } else if teapot[i + 1] == 'n' {
                 i = parse_vertex(teapot, i + 2, &normals_out)
+            } else if teapot[i + 1] == 't' {
+                i = parse_texcoord(teapot, i + 2, &texcoords_out)
             }
-            case 'f': i = parse_face(teapot, i, &indices_out, &normal_indices_out)
+            case 'f': i = parse_face(teapot, i, &indices_out, &normal_indices_out, &texcoord_indices_out)
         }
     }
 
-    return out, indices_out, normals_out, normal_indices_out
+    return out, indices_out, normals_out, normal_indices_out, texcoords_out, texcoord_indices_out
 }
 
 Renderable :: struct {
@@ -137,29 +201,42 @@ Renderable :: struct {
 }
 
 create_renderable :: proc(renderer_state: ^render_d3d12.State, rc_state: ^rc.State, filename: string, shader: render_types.Handle) -> (ren: Renderable) {
-    vertices, indices, normals, normal_indices := load_obj_model(filename)
+    vertices, indices, normals, normal_indices, texcoords, texcoord_indices := load_obj_model(filename)
     defer delete(vertices)
     defer delete(indices)
     defer delete(normals)
     defer delete(normal_indices)
+    defer delete(texcoords)
+    defer delete(texcoord_indices)
 
-    vertex_data := make([]f32, len(vertices) * 2)
+    vertex_data := make([]f32, len(vertices) * 3)
     defer delete(vertex_data)
     vdi := 0
     for v, i in vertices {
         vertex_data[vdi] = vertices[i]
         vdi += 1
         if (i + 1) % 3 == 0 && i != 0 {
-            vdi += 3
+            vdi += 5
         }
     }
 
-    for i in 0..<len(normal_indices) {
-        n_idx := normal_indices[i] * 3
-        v_idx := indices[i] * 6 + 3
-        vertex_data[v_idx] = normals[n_idx]
-        vertex_data[v_idx + 1] = normals[n_idx + 1]
-        vertex_data[v_idx + 2] = normals[n_idx + 2]
+    if len(normals) > 0 {
+        for i in 0..<len(normal_indices) {
+            n_idx := normal_indices[i] * 3
+            v_idx := indices[i] * 8 + 3
+            vertex_data[v_idx] = normals[n_idx]
+            vertex_data[v_idx + 1] = normals[n_idx + 1]
+            vertex_data[v_idx + 2] = normals[n_idx + 2]
+        }
+    }
+
+    if len(texcoords) > 0 {
+        for i in 0..<len(texcoord_indices) {
+            n_idx := texcoord_indices[i] * 2
+            v_idx := indices[i] * 8 + 6
+            vertex_data[v_idx] = texcoords[n_idx]
+            vertex_data[v_idx + 1] = texcoords[n_idx + 1]
+        }
     }
 
     vertex_buffer_size := len(vertex_data) * size_of(vertex_data[0])
@@ -167,7 +244,7 @@ create_renderable :: proc(renderer_state: ^render_d3d12.State, rc_state: ^rc.Sta
 
     cmdlist: rc.CommandList
     defer delete(cmdlist)
-    ren.vertex_buffer = rc.create_buffer(rc_state, &cmdlist, rc.VertexBufferDesc { stride = 24 }, rawptr(&vertex_data[0]), vertex_buffer_size, .Dynamic)
+    ren.vertex_buffer = rc.create_buffer(rc_state, &cmdlist, rc.VertexBufferDesc { stride = 32 }, rawptr(&vertex_data[0]), vertex_buffer_size, .Dynamic)
     ren.index_buffer = rc.create_buffer(rc_state, &cmdlist, rc.IndexBufferDesc { stride = 4 }, rawptr(&indices[0]), index_buffer_size, .Dynamic)
     render_d3d12.submit_command_list(renderer_state, &cmdlist)
 
@@ -248,8 +325,8 @@ run :: proc() {
         render_d3d12.submit_command_list(&renderer_state, &cmdlist)
     }
 
-    ren := create_renderable(&renderer_state, &ri_state, "teapot.obj", shader)
-    ren2 := create_renderable(&renderer_state, &ri_state, "car.obj", shader)
+    ren := create_renderable(&renderer_state, &ri_state, "capsule.obj", shader)
+    //ren2 := create_renderable(&renderer_state, &ri_state, "car.obj", shader)
 
     camera_pos := hlsl.float3 { 0, 0, -1 }
     camera_yaw: f32 = 0
@@ -405,12 +482,12 @@ run :: proc() {
         rc.destroy_resource(&ri_state, &cmdlist, fence)
         rc.destroy_resource(&ri_state, &cmdlist, ren.vertex_buffer)
         rc.destroy_resource(&ri_state, &cmdlist, ren.index_buffer)
-        rc.destroy_resource(&ri_state, &cmdlist, ren2.vertex_buffer)
-        rc.destroy_resource(&ri_state, &cmdlist, ren2.index_buffer)
+//        rc.destroy_resource(&ri_state, &cmdlist, ren2.vertex_buffer)
+  //      rc.destroy_resource(&ri_state, &cmdlist, ren2.index_buffer)
         rc.destroy_resource(&ri_state, &cmdlist, color_const)
         rc.destroy_resource(&ri_state, &cmdlist, sun_pos_const)
         rc.destroy_resource(&ri_state, &cmdlist, ren.mvp_buffer)
-        rc.destroy_resource(&ri_state, &cmdlist, ren2.mvp_buffer)
+    //    rc.destroy_resource(&ri_state, &cmdlist, ren2.mvp_buffer)
         rc.destroy_resource(&ri_state, &cmdlist, pipeline)
         render_d3d12.submit_command_list(&renderer_state, &cmdlist)
     }
