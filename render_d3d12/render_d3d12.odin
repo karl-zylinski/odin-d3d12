@@ -669,7 +669,7 @@ submit_command_list :: proc(s: ^State, commands: ^rc.CommandList) {
 
                         {
                             RangeType = .SRV,
-                            NumDescriptors = 1,
+                            NumDescriptors = 32,
                             BaseShaderRegister = 0,
                             RegisterSpace = 1,
                             OffsetInDescriptorsFromTableStart = d3d12.DESCRIPTOR_RANGE_OFFSET_APPEND,
