@@ -1,6 +1,7 @@
 TODO:
 
 * Textures
+    * CreateTexture exists now, but when does the upload heap die? It can't be released before copying is done.
     * Make them uploadable and settable from using commands
     * Can we merge their mgmt with constant buffers, some resource concept?
 * Vertex & index buffers bindless
