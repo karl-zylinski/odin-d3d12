@@ -409,7 +409,7 @@ run :: proc() {
         }
 
         sun_pos := hlsl.float3 {
-            math.cos(t)*50, 0, math.sin(t)*50,
+            math.cos(t*0.2)*50, 0, math.sin(t*0.2)*50,
         }
         render_d3d12.update(&renderer_state, pipeline)
 

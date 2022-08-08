@@ -23,8 +23,8 @@ PSInput VSMain(float4 position : POSITION0, float3 normal : NORMAL0, float2 uv :
 }
 
 float4 PSMain(PSInput input) : SV_TARGET {
-    Texture2D<float4> a = get_albedo();
+    Texture2D a = get_albedo();
     float4 sc = a.Sample(tex_sampler, input.uv);
     float3 sun_dir = normalize(get_sun_pos() - input.world_pos);
-    return float4(sc.rgb, 1);//clamp(float4(0.9,0.9,0.65,1) * saturate(dot(sun_dir, normalize(input.normal))), float4(0.2, 0.2, 0.23, 1), float4(1,1,1,1)) * get_color();
+    return clamp(float4(0.9,0.9,0.65,1) * saturate(dot(sun_dir, normalize(input.normal))), float4(0.2, 0.2, 0.23, 1), float4(1,1,1,1)) * sc;
 };

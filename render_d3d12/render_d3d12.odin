@@ -59,6 +59,9 @@ Pipeline :: struct {
     constant_buffer_bindless_index: int,
     constant_buffers_destroyed: [dynamic]ConstantBufferMemory,
     command_allocator: ^d3d12.ICommandAllocator,
+
+    texture_upload: ^d3d12.IResource,
+    texture: ^d3d12.IResource,
 }
 
 None :: struct {
@@ -382,7 +385,7 @@ submit_command_list :: proc(s: ^State, commands: ^rc.CommandList) {
 
                 {
                     desc := d3d12.DESCRIPTOR_HEAP_DESC {
-                        NumDescriptors = 10,
+                        NumDescriptors = 2,
                         Type = .CBV_SRV_UAV,
                         Flags = .SHADER_VISIBLE,
                     };
@@ -390,6 +393,8 @@ submit_command_list :: proc(s: ^State, commands: ^rc.CommandList) {
                     hr = s.device->CreateDescriptorHeap(&desc, d3d12.IDescriptorHeap_UUID, (^rawptr)(&p.cbv_descriptor_heap))
                     check(hr, s.info_queue, "Failed creating cbv descriptor heap")
                 }
+
+                res_handle: d3d12.CPU_DESCRIPTOR_HANDLE
 
                 {
                     heap_props := d3d12.HEAP_PROPERTIES {
@@ -417,9 +422,9 @@ submit_command_list :: proc(s: ^State, commands: ^rc.CommandList) {
                         BufferLocation = p.constant_buffer_bindless->GetGPUVirtualAddress(),
                     }
 
-                    res_handle: d3d12.CPU_DESCRIPTOR_HANDLE
                     p.cbv_descriptor_heap->GetCPUDescriptorHandleForHeapStart(&res_handle)
                     s.device->CreateConstantBufferView(&cbv_desc, res_handle)
+
                 }
 
                      // Descripors describe the GPU data and are allocated from a Descriptor Heap
@@ -485,9 +490,118 @@ submit_command_list :: proc(s: ^State, commands: ^rc.CommandList) {
                 hr = s.cmdlist->Close()
                 check(hr, s.info_queue, "Failed to close command list")
 
+                hr: d3d12.HRESULT
+                hr = p.command_allocator->Reset()
+                check(hr, s.info_queue, "Failed resetting command allocator")
+
+                hr = s.cmdlist->Reset(p.command_allocator, nil)
+                check(hr, s.info_queue, "Failed to reset command list")
+
+                {
+                    texture_desc := d3d12.RESOURCE_DESC {
+                        Dimension = .TEXTURE2D,
+                        Width = 2048,
+                        Height = 1024,
+                        Format = .R8G8B8A8_UNORM,
+                        DepthOrArraySize = 1,
+                        MipLevels = 1,
+                        SampleDesc = { Count = 1, Quality = 0, },
+                    }
+
+                    heap_props2 := d3d12.HEAP_PROPERTIES {
+                        Type = .DEFAULT, 
+                    }
+
+                    hr = s.device->CreateCommittedResource(&heap_props2, .NONE, &texture_desc, .COPY_DEST, nil, d3d12.IResource_UUID, (^rawptr)(&p.texture))
+                    check(hr, s.info_queue, "Failed creating commited resource")
+
+                    texture_srv_desc := d3d12.SHADER_RESOURCE_VIEW_DESC {
+                        Format = .R8G8B8A8_UNORM,
+                        ViewDimension = .TEXTURE2D,
+                        Shader4ComponentMapping = 5768,
+                    }
+
+                    texture_srv_desc.Texture2D.MipLevels = 1
+                    res_handle.ptr += uint(s.device->GetDescriptorHandleIncrementSize(.CBV_SRV_UAV))
+                    s.device->CreateShaderResourceView(p.texture, &texture_srv_desc, res_handle)
+                    check(hr, s.info_queue, "Failed creating commited resource")
+
+                    tex_size: u64
+                    s.device->GetCopyableFootprints(&texture_desc, 0, 1, 0, nil, nil, nil, &tex_size);
+
+                    upload_desc := d3d12.RESOURCE_DESC {
+                        Dimension = .BUFFER,
+                        Width = u64(tex_size),
+                        Height = 1,
+                        DepthOrArraySize = 1,
+                        MipLevels = 1,
+                        SampleDesc = { Count = 1, Quality = 0, },
+                        Layout = .ROW_MAJOR,
+                    }
+
+                    // now we create an upload heap to upload our texture to the GPU
+                    hr = s.device->CreateCommittedResource(
+                        &d3d12.HEAP_PROPERTIES { Type = .UPLOAD },
+                        .NONE, // no flags
+                        &upload_desc, // resource description for a buffer (storing the image data in this heap just to copy to the default heap)
+                        .GENERIC_READ, // We will copy the contents from this heap to the default heap above
+                        nil,
+                        d3d12.IResource_UUID, (^rawptr)(&p.texture_upload))
+
+                    check(hr, s.info_queue, "Failed creating commited resource")
+                    //p.texture_upload->SetName("Texture Buffer Upload Resource Heap")
+                    
+                    f, err := os.open("capsule0.raw")
+                    defer os.close(f)
+                    fs, _ := os.file_size(f)
+                    img := make([]byte, fs, context.temp_allocator)
+                    os.read(f, img)
+
+                    texture_upload_map: rawptr
+                    p.texture_upload->Map(0, &d3d12.RANGE{}, &texture_upload_map)
+                    mem.copy(texture_upload_map, rawptr(&img[0]), int(fs))
+                    p.texture_upload->Unmap(0, nil)
+
+                    copy_location := d3d12.TEXTURE_COPY_LOCATION { pResource = p.texture_upload, Type = .PLACED_FOOTPRINT }
+
+                    s.device->GetCopyableFootprints(&texture_desc, 0, 1, 0, &copy_location.PlacedFootprint, nil, nil, nil);
+
+                    s.cmdlist->CopyTextureRegion(
+                            &d3d12.TEXTURE_COPY_LOCATION { pResource = p.texture },
+                            0, 0, 0, 
+                            &copy_location,
+                            nil)
+
+                    b := d3d12.RESOURCE_BARRIER {
+                        Type = .TRANSITION,
+                        Flags = .NONE,
+                    }
+
+                    b.Transition = {
+                        pResource = p.texture,
+                        StateBefore = .COPY_DEST,
+                        StateAfter = .PIXEL_SHADER_RESOURCE,
+                        Subresource = d3d12.RESOURCE_BARRIER_ALL_SUBRESOURCES,
+                    }
+
+                    s.cmdlist->ResourceBarrier(1, &b);
+
+                   /*r: d3d12.RANGE = {}
+                    p.texture->Map(0, &r, (^rawptr)(&p.texture_map))
+                    //test_tex := mem.alloc(2048 * 1024 * 4)
+                    mem.set(p.texture_map, 255, 2048 * 1024 * 4)
+                    //p.texture->WriteToSubresource(0, nil, test_tex, 2048 * 4, 2048 * 1024 * 4)
+                    p.texture->Unmap(0, nil)*/
+                }
+
                 p.constant_buffer_memory_info = make(map[rt.Handle]ConstantBufferMemory)
 
                 set_resource(s, c.handle, p)
+
+                hr = s.cmdlist->Close()
+                check(hr, s.info_queue, "Failed to close command list")
+                cmdlists := [?]^d3d12.IGraphicsCommandList { s.cmdlist }
+                p.queue->ExecuteCommandLists(len(cmdlists), (^^d3d12.ICommandList)(&cmdlists[0]))
             }
             case rc.CreateShader: {
                 rd: Shader
@@ -550,13 +664,15 @@ submit_command_list :: proc(s: ^State, commands: ^rc.CommandList) {
                             NumDescriptors = 1,
                             BaseShaderRegister = 0,
                             RegisterSpace = 0,
+                            OffsetInDescriptorsFromTableStart = d3d12.DESCRIPTOR_RANGE_OFFSET_APPEND,
                         },
 
                         {
                             RangeType = .SRV,
-                            NumDescriptors = 10,
+                            NumDescriptors = 1,
                             BaseShaderRegister = 0,
                             RegisterSpace = 1,
+                            OffsetInDescriptorsFromTableStart = d3d12.DESCRIPTOR_RANGE_OFFSET_APPEND,
                         },
                     }
 
