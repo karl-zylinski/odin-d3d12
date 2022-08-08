@@ -139,6 +139,15 @@ DestroyConstant :: struct {
     pipeline: Handle,
 }
 
+CreateTexture :: struct {
+    handle: Handle,
+    data: rawptr,
+    format: render_types.TextureFormat,
+    width: int,
+    height: int,
+    pipeline: Handle,
+}
+
 Command :: union {
     Noop,
     Present,
@@ -161,6 +170,7 @@ Command :: union {
     UploadConstant,
     SetConstant,
     DestroyConstant,
+    CreateTexture,
 }
 
 CommandList :: distinct [dynamic]Command
@@ -260,6 +270,25 @@ upload_constant :: proc(s: ^State, command_list: ^CommandList, pipeline: Handle,
 
 destroy_constant :: proc(s: ^State, command_list: ^CommandList, pipeline: Handle, constant: Handle) {
     append(command_list, DestroyConstant { constant = constant, pipeline = pipeline })
+}
+
+create_texture :: proc(s: ^State, command_list: ^CommandList, pipeline: Handle, format: render_types.TextureFormat, width: int, height: int, data: rawptr) -> Handle {
+    h := get_handle(s)
+
+    tx_size := render_types.texture_size(format, width, height)
+
+    c := CreateTexture {
+        handle = h,
+        data = mem.alloc(tx_size),
+        width = width,
+        height = height,
+        format = format,
+        pipeline = pipeline,
+    }
+
+    mem.copy(c.data, data, tx_size)
+    append(command_list, c)
+    return h
 }
 
 State :: struct {

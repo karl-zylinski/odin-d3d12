@@ -337,6 +337,8 @@ run :: proc() {
     color_const := rc.create_constant(&ri_state)
     sun_pos_const := rc.create_constant(&ri_state)
 
+    first_frame := true
+
     main_loop: for {
         t += 0.16
         render_d3d12.new_frame(&renderer_state, pipeline)
@@ -415,6 +417,19 @@ run :: proc() {
 
         cmdlist: rc.CommandList
         defer delete(cmdlist)
+
+        if first_frame == true {
+            f, err := os.open("capsule0.raw")
+            defer os.close(f)
+            fs, _ := os.file_size(f)
+            img := make([]byte, fs, context.temp_allocator)
+            os.read(f, img)
+
+            texture := rc.create_texture(&ri_state, &cmdlist, pipeline, .R8G8B8A8_UNORM, 2048, 1024, rawptr(&img[0]))
+
+            first_frame = false
+        }
+
         append(&cmdlist, rc.SetPipeline {
             handle = pipeline,
         })
