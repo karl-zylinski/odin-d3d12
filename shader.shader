@@ -1,6 +1,6 @@
-#cbuffer color float4 dynamic
-#cbuffer sun_pos float3 dynamic
-#cbuffer mvp float4x4 dynamic
+#cbuffer color float4
+#cbuffer sun_pos float3
+#cbuffer mvp float4x4
 
 #texture2d albedo2
 #texture2d albedo
@@ -33,5 +33,5 @@ float4 PSMain(PSInput input) : SV_TARGET {
         sc = a2.Sample(tex_sampler, input.uv);
     }
     float3 sun_dir = normalize(get_sun_pos() - input.world_pos);
-    return clamp(float4(0.9,0.9,0.65,1) * saturate(dot(sun_dir, normalize(input.normal))), float4(0.2, 0.2, 0.23, 1), float4(1,1,1,1)) * sc;
+    return clamp(float4(0.9,0.9,0.65,1) * saturate(dot(sun_dir, normalize(input.normal))), float4(0.2, 0.2, 0.23, 1), float4(1,1,1,1)) * sc * get_color();
 };

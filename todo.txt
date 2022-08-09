@@ -1,10 +1,12 @@
 TODO:
 
 * Textures
-    * CreateTexture exists now, but when does the upload heap die? It can't be released before copying is done.
-    * Make them uploadable and settable from using commands
+    X CreateTexture exists now, but when does the upload heap die? It can't be released before copying is done.
+    X Make them uploadable and settable from using commands
     * Can we merge their mgmt with constant buffers, some resource concept?
+* ResourceTransition command seems broken. There is no resource to set?
 * Vertex & index buffers bindless
+* Render something with a normal map and albedo
 * Render targets, render to off-screen target
     * Step 1: Render to off-screen target and then fullscreen blit that target to backbuffer (just a test)
     * Step 2: Render to GBuffer and make it possible to blit out specific parts of GBuffer

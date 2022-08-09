@@ -232,6 +232,7 @@ destroy_resource :: proc(s: ^State, handle: rt.Handle) {
             r.pipeline_state->Release()
             r.root_signature->Release()
             delete(r.constant_buffers)
+            delete(r.textures)
             res^ = Resource{}
         }
         case Pipeline: {
@@ -247,6 +248,7 @@ destroy_resource :: proc(s: ^State, handle: rt.Handle) {
             r.constant_buffer_bindless->Release()
             delete(r.constant_buffer_memory_info)
             delete(r.constant_buffers_destroyed)
+            delete(r.delayed_destroy)
             res^ = Resource{}
         }
         case ConstantBufferMemory: {
@@ -280,9 +282,9 @@ constant_buffer_type_size :: proc(t: ss.ConstantBufferType) -> int {
     return 0
 }
 
-submit_command_list :: proc(s: ^State, commands: ^rc.CommandList) {
+submit_command_list :: proc(s: ^State, cmdlist: ^rc.CommandList) {
     hr: d3d12.HRESULT
-    for command in commands {
+    for command in &cmdlist.commands {
         switch c in &command {
             case rc.Noop: {}
             case rc.DestroyResource: {
@@ -307,8 +309,6 @@ submit_command_list :: proc(s: ^State, commands: ^rc.CommandList) {
                                     texture_srv_desc.Texture2D.MipLevels = 1
 
                                     s.device->CreateShaderResourceView(t.res, &texture_srv_desc, res_handle)
-                                    check(hr, s.info_queue, "Failed creating commited resource")
-                                    //s.cmdlist->SetGraphicsRoot32BitConstants(1, 1, &cb_info.offset, u32(arr_idx))
                                     break;
                                 }
                             }
@@ -396,6 +396,8 @@ submit_command_list :: proc(s: ^State, commands: ^rc.CommandList) {
                     s.cmdlist->ResourceBarrier(1, &b);
 
                     set_resource(s, c.handle, t)
+
+                    free(c.data)
                 }
             }
             case rc.SetShader: {
@@ -907,25 +909,12 @@ submit_command_list :: proc(s: ^State, commands: ^rc.CommandList) {
                 hr = s.device->CreateCommittedResource(&heap_props, .NONE, &resource_desc, .GENERIC_READ, nil, d3d12.IResource_UUID, (^rawptr)(&rd.buffer))
                 check(hr, s.info_queue, "Failed buffer")
 
-                switch c.type {
-                    case .Static:
-                        gpu_data: rawptr
-                        read_range: d3d12.RANGE
-                        hr = rd.buffer->Map(0, &read_range, &gpu_data)
-                        check(hr, s.info_queue, "Failed creating verex buffer resource")
-                        mem.copy(gpu_data, c.data, c.size)
-                        rd.buffer->Unmap(0, nil)
-                    case .Dynamic:
-                        hr = s.device->CreateCommittedResource(&heap_props, .NONE, &resource_desc, .GENERIC_READ, nil, d3d12.IResource_UUID, (^rawptr)(&rd.staging_buffer))
-                        check(hr, s.info_queue, "Failed creating staging buffer")
-                        gpu_data: rawptr
-                        read_range: d3d12.RANGE
-                        hr = rd.staging_buffer->Map(0, &read_range, &gpu_data)
-                        check(hr, s.info_queue, "Failed creating verex buffer resource")
-                        mem.copy(gpu_data, c.data, c.size)
-                        rd.staging_buffer->Unmap(0, nil)
-                        rd.staging_buffer_updated = true
-                }
+                gpu_data: rawptr
+                read_range: d3d12.RANGE
+                hr = rd.buffer->Map(0, &read_range, &gpu_data)
+                check(hr, s.info_queue, "Failed creating verex buffer resource")
+                mem.copy(gpu_data, c.data, c.size)
+                rd.buffer->Unmap(0, nil)
 
                 switch d in c.desc {
                     case rc.VertexBufferDesc: {
@@ -945,24 +934,6 @@ submit_command_list :: proc(s: ^State, commands: ^rc.CommandList) {
                 }
 
                 set_resource(s, c.handle, rd)
-                free(c.data)
-            }
-
-            case rc.UpdateBuffer: {
-                if b, ok := &s.resources[c.handle].resource.(Buffer); ok {
-                    if b.staging_buffer != nil {
-                        gpu_data: rawptr
-                        read_range: d3d12.RANGE
-                        hr = b.staging_buffer->Map(0, &read_range, &gpu_data)
-                        check(hr, s.info_queue, "Failed creating vertex buffer resource")
-                        mem.copy(gpu_data, c.data, c.size)
-                        b.staging_buffer->Unmap(0, nil)
-                        b.staging_buffer_updated = true
-                    } else {
-                        fmt.println("Trying to update non-updatable buffer")
-                    }
-                }
-
                 free(c.data)
             }
 
@@ -1093,6 +1064,8 @@ submit_command_list :: proc(s: ^State, commands: ^rc.CommandList) {
                 }
         }
     }
+
+    rc.destroy_command_list(cmdlist)
 }
 
 new_frame :: proc(s: ^State, pipeline: rt.Handle) {
@@ -1123,15 +1096,6 @@ d3d_format :: proc(fmt: rt.TextureFormat) -> dxgi.FORMAT {
 }
 
 update :: proc(s: ^State, pipeline: rt.Handle) {
-    for res in &s.resources {
-        if b, ok := &res.resource.(Buffer); ok {
-            if b.staging_buffer_updated {
-                s.cmdlist->CopyBufferRegion(b.buffer, 0, b.staging_buffer, 0, u64(b.size))
-                b.staging_buffer_updated = false
-            }
-        } 
-    }
-
     if p, ok := &s.resources[pipeline].resource.(Pipeline); ok {
         for i := 0; i < len(p.delayed_destroy); {
             if p.current_frame >= p.delayed_destroy[i].destroy_at_frame {

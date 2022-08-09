@@ -14,7 +14,6 @@ ConstantBufferType :: enum {
 ConstantBuffer :: struct {
     type: ConstantBufferType,
     name: string,
-    updatable: bool,
 }
 
 Texture2D :: struct {
@@ -119,10 +118,6 @@ load_shader :: proc(path: string) -> Shader {
         if !first_on_line(code, i) {
             prop: string
             prop, i = get_word(code, i)
-
-            if strings.equal_fold(prop, "dynamic") {
-                cb.updatable = true
-            }
         }
 
         return cb, i

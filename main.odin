@@ -242,10 +242,9 @@ create_renderable :: proc(renderer_state: ^render_d3d12.State, rc_state: ^rc.Sta
     vertex_buffer_size := len(vertex_data) * size_of(vertex_data[0])
     index_buffer_size := len(indices) * size_of(indices[0])
 
-    cmdlist: rc.CommandList
-    defer delete(cmdlist)
-    ren.vertex_buffer = rc.create_buffer(rc_state, &cmdlist, rc.VertexBufferDesc { stride = 32 }, rawptr(&vertex_data[0]), vertex_buffer_size, .Dynamic)
-    ren.index_buffer = rc.create_buffer(rc_state, &cmdlist, rc.IndexBufferDesc { stride = 4 }, rawptr(&indices[0]), index_buffer_size, .Dynamic)
+    cmdlist := rc.create_command_list(rc_state)
+    ren.vertex_buffer = rc.create_buffer(&cmdlist, rc.VertexBufferDesc { stride = 32 }, rawptr(&vertex_data[0]), vertex_buffer_size)
+    ren.index_buffer = rc.create_buffer(&cmdlist, rc.IndexBufferDesc { stride = 4 }, rawptr(&indices[0]), index_buffer_size)
     render_d3d12.submit_command_list(renderer_state, &cmdlist)
 
     ren.mvp_buffer = rc.create_constant(rc_state)
@@ -265,19 +264,9 @@ render_renderable :: proc(rc_state: ^rc.State, pipeline: render_types.Handle, cm
         0, 0, 1.0, 0,
     }, lin.mul(view, model))
 
-    rc.upload_constant(rc_state, cmdlist, pipeline, ren.mvp_buffer, &mvp)
-
-    append(cmdlist, rc.SetConstant {
-        pipeline = pipeline,
-        shader = ren.shader,
-        name = base.hash("mvp"),
-        constant = ren.mvp_buffer,
-    })
-
-    append(cmdlist, rc.DrawCall {
-        vertex_buffer = ren.vertex_buffer,
-        index_buffer = ren.index_buffer,
-    })
+    rc.upload_constant(cmdlist, pipeline, ren.mvp_buffer, &mvp)
+    rc.set_constant(cmdlist, pipeline, ren.shader, base.hash("mvp"), ren.mvp_buffer)
+    rc.draw_call(cmdlist, ren.vertex_buffer, ren.index_buffer)
 }
 
 near :: f32(0.01)
@@ -316,12 +305,11 @@ run :: proc() {
     shader: render_types.Handle
 
     {
-        cmdlist: rc.CommandList
-        defer delete(cmdlist)
-        pipeline = rc.create_pipeline(&ri_state, &cmdlist, f32(wx), f32(wy), render_types.WindowHandle(uintptr(window_handle)))
+        cmdlist := rc.create_command_list(&ri_state)
+        pipeline = rc.create_pipeline(&cmdlist, f32(wx), f32(wy), render_types.WindowHandle(uintptr(window_handle)))
         shader_def := shader_system.load_shader("shader.shader")
-        shader = rc.create_shader(&ri_state, &cmdlist, shader_def)
-        fence = rc.create_fence(&ri_state, &cmdlist)
+        shader = rc.create_shader(&cmdlist, shader_def)
+        fence = rc.create_fence(&cmdlist)
         render_d3d12.submit_command_list(&renderer_state, &cmdlist)
     }
 
@@ -408,7 +396,7 @@ run :: proc() {
         view: hlsl.float4x4 = hlsl.inverse(lin.mul(camera_trans, hlsl.float4x4(camera_rot)))
 
         color := hlsl.float4 {
-            1, 0, 0, 1,
+            1, 1, 1, 1,
         }
 
         sun_pos := hlsl.float3 {
@@ -416,8 +404,7 @@ run :: proc() {
         }
         render_d3d12.update(&renderer_state, pipeline)
 
-        cmdlist: rc.CommandList
-        defer delete(cmdlist)
+        cmdlist := rc.create_command_list(&ri_state)
 
         if first_frame == true {
             {
@@ -427,7 +414,7 @@ run :: proc() {
                 img := make([]byte, fs, context.temp_allocator)
                 os.read(f, img)
 
-                texture = rc.create_texture(&ri_state, &cmdlist, pipeline, .R8G8B8A8_UNORM, 2048, 1024, rawptr(&img[0]))
+                texture = rc.create_texture(&cmdlist, pipeline, .R8G8B8A8_UNORM, 2048, 1024, rawptr(&img[0]))
             }
 
             {
@@ -437,80 +424,29 @@ run :: proc() {
                 img := make([]byte, fs, context.temp_allocator)
                 os.read(f, img)
 
-                texture2 = rc.create_texture(&ri_state, &cmdlist, pipeline, .R8G8B8A8_UNORM, 2048, 1024, rawptr(&img[0]))
+                texture2 = rc.create_texture(&cmdlist, pipeline, .R8G8B8A8_UNORM, 2048, 1024, rawptr(&img[0]))
             }
 
-            append(&cmdlist, rc.SetTexture {
-                pipeline = pipeline,
-                shader = shader,
-                name = base.hash("albedo"),
-                texture = texture,
-            })    
-            append(&cmdlist, rc.SetTexture {
-                pipeline = pipeline,
-                shader = shader,
-                name = base.hash("albedo2"),
-                texture = texture2,
-            }) 
+            rc.set_texture(&cmdlist, pipeline, shader, base.hash("albedo"), texture)
+            rc.set_texture(&cmdlist, pipeline, shader, base.hash("albedo2"), texture2)
 
             first_frame = false
         }
 
-        if lin.fract(t) > 0.5 {
-            append(&cmdlist, rc.SetTexture {
-                pipeline = pipeline,
-                shader = shader,
-                name = base.hash("albedo"),
-                texture = texture,
-            })
-        } else {
-            append(&cmdlist, rc.SetTexture {
-                pipeline = pipeline,
-                shader = shader,
-                name = base.hash("albedo"),
-                texture = texture2,
-            }) 
-        }
-        
+        rc.set_texture(&cmdlist, pipeline, shader, base.hash("albedo"), lin.fract(t) > 0.5 ? texture : texture2)
+        rc.set_pipeline(&cmdlist, pipeline)
+        rc.set_shader(&cmdlist, pipeline, shader)
+        rc.upload_constant(&cmdlist, pipeline, sun_pos_const, &sun_pos)
+        rc.set_constant(&cmdlist, pipeline, shader, base.hash("sun_pos"), sun_pos_const)
+        rc.upload_constant(&cmdlist, pipeline, color_const, &color)
+        rc.set_constant(&cmdlist, pipeline, shader, base.hash("color"), color_const)
 
-        append(&cmdlist, rc.SetPipeline {
-            handle = pipeline,
-        })
-        append(&cmdlist, rc.SetShader {
-            handle = shader,
-            pipeline = pipeline,
-        })
+        rc.set_scissor(&cmdlist, { w = f32(wx), h = f32(wy), })
+        rc.set_viewport(&cmdlist, { w = f32(wx), h = f32(wy), })
 
-        rc.upload_constant(&ri_state, &cmdlist, pipeline, sun_pos_const, &sun_pos)
-
-        append(&cmdlist, rc.SetConstant {
-            pipeline = pipeline,
-            shader = shader,
-            name = base.hash("sun_pos"),
-            constant = sun_pos_const,
-        })
-
-        rc.upload_constant(&ri_state, &cmdlist, pipeline, color_const, &color)
-
-        append(&cmdlist, rc.SetConstant {
-            pipeline = pipeline,
-            shader = shader,
-            name = base.hash("color"),
-            constant = color_const,
-        })
-
-        append(&cmdlist, rc.SetScissor {
-            rect = { w = f32(wx), h = f32(wy), },
-        })
-        append(&cmdlist, rc.SetViewport {
-            rect = { w = f32(wx), h = f32(wy), },
-        })
-        append(&cmdlist, rc.ResourceTransition {
-            before = .Present,
-            after = .RenderTarget,    
-        })
-        append(&cmdlist, rc.ClearRenderTarget { render_target = { pipeline = pipeline, }, clear_color = {0, 0, 0, 1}, })
-        append(&cmdlist, rc.SetRenderTarget { render_target = { pipeline = pipeline, }, })
+        rc.resource_transition(&cmdlist, .Present, .RenderTarget)
+        rc.clear_render_target(&cmdlist, pipeline, {0, 0, 0, 1})
+        rc.set_render_target(&cmdlist, pipeline)
 
         {
     //        ren.position.x = math.cos(t*0.1)*10
@@ -523,30 +459,26 @@ run :: proc() {
             render_renderable(&ri_state, pipeline, &cmdlist, view, &ren2)*/
         }
 
-        append(&cmdlist, rc.ResourceTransition {
-            before = .RenderTarget,
-            after = .Present,    
-        })
-        append(&cmdlist, rc.Execute{ pipeline = pipeline, })
-        append(&cmdlist, rc.Present{ handle = pipeline })
-        append(&cmdlist, rc.WaitForFence { fence = fence, pipeline = pipeline, })
+        rc.resource_transition(&cmdlist, .RenderTarget, .Present)
+        rc.execute(&cmdlist, pipeline)
+        rc.present(&cmdlist, pipeline)
+        rc.wait_for_fence(&cmdlist, pipeline, fence)
         render_d3d12.submit_command_list(&renderer_state, &cmdlist)
     }
 
     {
-        cmdlist: rc.CommandList
-        defer delete(cmdlist)
-        rc.destroy_resource(&ri_state, &cmdlist, shader)
-        rc.destroy_resource(&ri_state, &cmdlist, fence)
-        rc.destroy_resource(&ri_state, &cmdlist, ren.vertex_buffer)
-        rc.destroy_resource(&ri_state, &cmdlist, ren.index_buffer)
-//        rc.destroy_resource(&ri_state, &cmdlist, ren2.vertex_buffer)
-  //      rc.destroy_resource(&ri_state, &cmdlist, ren2.index_buffer)
-        rc.destroy_resource(&ri_state, &cmdlist, color_const)
-        rc.destroy_resource(&ri_state, &cmdlist, sun_pos_const)
-        rc.destroy_resource(&ri_state, &cmdlist, ren.mvp_buffer)
-    //    rc.destroy_resource(&ri_state, &cmdlist, ren2.mvp_buffer)
-        rc.destroy_resource(&ri_state, &cmdlist, pipeline)
+        cmdlist := rc.create_command_list(&ri_state)
+        rc.destroy_resource(&cmdlist, shader)
+        rc.destroy_resource(&cmdlist, fence)
+        rc.destroy_resource(&cmdlist, ren.vertex_buffer)
+        rc.destroy_resource(&cmdlist, ren.index_buffer)
+//        rc.destroy_resource(&cmdlist, ren2.vertex_buffer)
+  //      rc.destroy_resource(&cmdlist, ren2.index_buffer)
+        rc.destroy_resource(&cmdlist, color_const)
+        rc.destroy_resource(&cmdlist, sun_pos_const)
+        rc.destroy_resource(&cmdlist, ren.mvp_buffer)
+    //    rc.destroy_resource(&cmdlist, ren2.mvp_buffer)
+        rc.destroy_resource(&cmdlist, pipeline)
         render_d3d12.submit_command_list(&renderer_state, &cmdlist)
     }
     
