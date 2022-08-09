@@ -299,13 +299,13 @@ run :: proc() {
     sdl2.GetWindowWMInfo(window, &window_info)
     window_handle := dxgi.HWND(window_info.info.win.window)
     renderer_state := render_d3d12.create(wx, wy, window_handle)
-    ri_state: rc.State
+    rc_state: rc.State
     fence: render_types.Handle
     pipeline: render_types.Handle
     shader: render_types.Handle
 
     {
-        cmdlist := rc.create_command_list(&ri_state)
+        cmdlist := rc.create_command_list(&rc_state)
         pipeline = rc.create_pipeline(&cmdlist, f32(wx), f32(wy), render_types.WindowHandle(uintptr(window_handle)))
         shader_def := shader_system.load_shader("shader.shader")
         shader = rc.create_shader(&cmdlist, shader_def)
@@ -313,8 +313,8 @@ run :: proc() {
         render_d3d12.submit_command_list(&renderer_state, &cmdlist)
     }
 
-    ren := create_renderable(&renderer_state, &ri_state, "capsule.obj", shader)
-    //ren2 := create_renderable(&renderer_state, &ri_state, "car.obj", shader)
+    ren := create_renderable(&renderer_state, &rc_state, "capsule.obj", shader)
+    //ren2 := create_renderable(&renderer_state, &rc_state, "car.obj", shader)
 
     camera_pos := hlsl.float3 { 0, 0, -1 }
     camera_yaw: f32 = 0
@@ -322,8 +322,8 @@ run :: proc() {
     input: [4]bool
     t :f32= 0
 
-    color_const := rc.create_constant(&ri_state)
-    sun_pos_const := rc.create_constant(&ri_state)
+    color_const := rc.create_constant(&rc_state)
+    sun_pos_const := rc.create_constant(&rc_state)
 
     first_frame := true
     texture, texture2: rc.Handle
@@ -404,7 +404,7 @@ run :: proc() {
         }
         render_d3d12.update(&renderer_state, pipeline)
 
-        cmdlist := rc.create_command_list(&ri_state)
+        cmdlist := rc.create_command_list(&rc_state)
 
         if first_frame == true {
             {
@@ -450,13 +450,13 @@ run :: proc() {
 
         {
     //        ren.position.x = math.cos(t*0.1)*10
-            render_renderable(&ri_state, pipeline, &cmdlist, view, &ren)
+            render_renderable(&rc_state, pipeline, &cmdlist, view, &ren)
         }
 
         {
       /*      ren2.position.x = 3
             ren2.position.z = math.sin(t*0.1)*10
-            render_renderable(&ri_state, pipeline, &cmdlist, view, &ren2)*/
+            render_renderable(&rc_state, pipeline, &cmdlist, view, &ren2)*/
         }
 
         rc.resource_transition(&cmdlist, .RenderTarget, .Present)
@@ -467,7 +467,7 @@ run :: proc() {
     }
 
     {
-        cmdlist := rc.create_command_list(&ri_state)
+        cmdlist := rc.create_command_list(&rc_state)
         rc.destroy_resource(&cmdlist, shader)
         rc.destroy_resource(&cmdlist, fence)
         rc.destroy_resource(&cmdlist, ren.vertex_buffer)
@@ -483,7 +483,7 @@ run :: proc() {
     }
     
     render_d3d12.destroy(&renderer_state)
-    rc.destroy_state(&ri_state)
+    rc.destroy_state(&rc_state)
 }
 
 main :: proc() {
