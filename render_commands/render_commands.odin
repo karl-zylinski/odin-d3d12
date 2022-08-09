@@ -3,7 +3,7 @@ package render_commands
 import "core:mem"
 import "../render_types"
 import "core:math/linalg/hlsl"
-import "../zg_math"
+import "../math"
 import "../shader_system"
 import "../base"
 
@@ -175,13 +175,13 @@ set_shader :: proc(cmdlist: ^CommandList, pipeline: Handle, shader: Handle) {
     })
 }
 
-set_scissor :: proc(cmdlist: ^CommandList, rect: zg_math.Rect) {
+set_scissor :: proc(cmdlist: ^CommandList, rect: math.Rect) {
     append(&cmdlist.commands, SetScissor {
         rect = rect
     })
 }
 
-set_viewport :: proc(cmdlist: ^CommandList, rect: zg_math.Rect) {
+set_viewport :: proc(cmdlist: ^CommandList, rect: math.Rect) {
     append(&cmdlist.commands, SetViewport {
         rect = rect
     })
@@ -288,11 +288,11 @@ SetRenderTarget :: struct {
 }
 
 SetViewport :: struct {
-    rect: zg_math.Rect,
+    rect: math.Rect,
 }
 
 SetScissor :: struct {
-    rect: zg_math.Rect,
+    rect: math.Rect,
 }
 
 SetPipeline :: struct {

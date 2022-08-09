@@ -12,11 +12,9 @@ import "vendor:directx/dxgi"
 import "render_d3d12"
 import rc "render_commands"
 import "render_types"
-import "core:math"
-import "core:math/linalg/hlsl"
-import lin "core:math/linalg"
 import "shader_system"
 import "base"
+import "math"
 
 load_obj_model :: proc(filename: string) -> ([dynamic]f32, [dynamic]u32, [dynamic]f32, [dynamic]u32, [dynamic]f32, [dynamic]u32)  {
     f, err := os.open(filename)
@@ -196,7 +194,7 @@ Renderable :: struct {
     vertex_buffer: render_types.Handle,
     index_buffer: render_types.Handle,
     mvp_buffer: render_types.Handle,
-    position: hlsl.float4,
+    position: math.float4,
     shader: render_types.Handle,
 }
 
@@ -253,16 +251,16 @@ create_renderable :: proc(renderer_state: ^render_d3d12.State, rc_state: ^rc.Sta
     return ren
 }
 
-render_renderable :: proc(rc_state: ^rc.State, pipeline: render_types.Handle, cmdlist: ^rc.CommandList, view: hlsl.float4x4, ren: ^Renderable) {
-    model: hlsl.float4x4 = 1
+render_renderable :: proc(rc_state: ^rc.State, pipeline: render_types.Handle, cmdlist: ^rc.CommandList, view: math.float4x4, ren: ^Renderable) {
+    model: math.float4x4 = 1
     model[3].xyz = ren.position.xyz
 
-    mvp := lin.mul(hlsl.float4x4 {
+    mvp := math.mul(math.float4x4 {
         1, 0, 0, 0,
         0, 1, 0, 0,
         0, 0, far/(far - near), (-far * near)/(far - near),
         0, 0, 1.0, 0,
-    }, lin.mul(view, model))
+    }, math.mul(view, model))
 
     rc.upload_constant(cmdlist, pipeline, ren.mvp_buffer, &mvp)
     rc.set_constant(cmdlist, pipeline, ren.shader, base.hash("mvp"), ren.mvp_buffer)
@@ -316,7 +314,7 @@ run :: proc() {
     ren := create_renderable(&renderer_state, &rc_state, "capsule.obj", shader)
     //ren2 := create_renderable(&renderer_state, &rc_state, "car.obj", shader)
 
-    camera_pos := hlsl.float3 { 0, 0, -1 }
+    camera_pos := math.float3 { 0, 0, -1 }
     camera_yaw: f32 = 0
     camera_pitch: f32 = 0
     input: [4]bool
@@ -332,9 +330,9 @@ run :: proc() {
         t += 0.016
         render_d3d12.new_frame(&renderer_state, pipeline)
 
-        camera_rot_x := lin.matrix4_rotate(camera_pitch, lin.Vector3f32{1, 0, 0})
-        camera_rot_y := lin.matrix4_rotate(camera_yaw, lin.Vector3f32{0, 1, 0})
-        camera_rot := lin.mul(camera_rot_y, camera_rot_x)
+        camera_rot_x := math.matrix4_rotate(camera_pitch, math.float3{1, 0, 0})
+        camera_rot_y := math.matrix4_rotate(camera_yaw, math.float3{0, 1, 0})
+        camera_rot := math.mul(camera_rot_y, camera_rot_x)
 
         for e: sdl2.Event; sdl2.PollEvent(&e) != false; {
             #partial switch e.type {
@@ -376,30 +374,30 @@ run :: proc() {
         }
 
         if input[0] {
-            camera_pos += lin.mul(camera_rot, hlsl.float4{0,0,1,1}).xyz * 0.1
+            camera_pos += math.mul(camera_rot, math.float4{0,0,1,1}).xyz * 0.1
         }
 
         if input[1] {
-            camera_pos -= lin.mul(camera_rot, hlsl.float4{0,0,1,1}).xyz * 0.1
+            camera_pos -= math.mul(camera_rot, math.float4{0,0,1,1}).xyz * 0.1
         }
 
         if input[2] {
-            camera_pos -= lin.mul(camera_rot, hlsl.float4{1,0,0,1}).xyz * 0.1
+            camera_pos -= math.mul(camera_rot, math.float4{1,0,0,1}).xyz * 0.1
         }
             
         if input[3] {
-            camera_pos += lin.mul(camera_rot, hlsl.float4{1,0,0,1}).xyz * 0.1
+            camera_pos += math.mul(camera_rot, math.float4{1,0,0,1}).xyz * 0.1
         }
 
-        camera_trans: hlsl.float4x4 = 1
+        camera_trans: math.float4x4 = 1
         camera_trans[3].xyz = ([3]f32)(camera_pos)
-        view: hlsl.float4x4 = hlsl.inverse(lin.mul(camera_trans, hlsl.float4x4(camera_rot)))
+        view: math.float4x4 = math.inverse(math.mul(camera_trans, math.float4x4(camera_rot)))
 
-        color := hlsl.float4 {
+        color := math.float4 {
             1, 1, 1, 1,
         }
 
-        sun_pos := hlsl.float3 {
+        sun_pos := math.float3 {
             math.cos(t)*50, 0, math.sin(t)*50,
         }
         render_d3d12.update(&renderer_state, pipeline)
@@ -433,7 +431,7 @@ run :: proc() {
             first_frame = false
         }
 
-        rc.set_texture(&cmdlist, pipeline, shader, base.hash("albedo"), lin.fract(t) > 0.5 ? texture : texture2)
+        rc.set_texture(&cmdlist, pipeline, shader, base.hash("albedo"), math.fract(t) > 0.5 ? texture : texture2)
         rc.set_pipeline(&cmdlist, pipeline)
         rc.set_shader(&cmdlist, pipeline, shader)
         rc.upload_constant(&cmdlist, pipeline, sun_pos_const, &sun_pos)
