@@ -325,8 +325,6 @@ run :: proc() {
 
     main_loop: for {
         t += 0.016
-        render_d3d12.new_frame(&renderer_state, pipeline)
-
         camera_rot_x := math.matrix4_rotate(camera_pitch, math.float3{1, 0, 0})
         camera_rot_y := math.matrix4_rotate(camera_yaw, math.float3{0, 1, 0})
         camera_rot := math.mul(camera_rot_y, camera_rot_x)

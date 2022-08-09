@@ -1077,11 +1077,6 @@ submit_command_list :: proc(s: ^State, cmdlist: ^rc.CommandList) {
     rc.destroy_command_list(cmdlist)
 }
 
-new_frame :: proc(s: ^State, pipeline: rt.Handle) {
-    if p, ok := &s.resources[pipeline].resource.(Pipeline); ok {
-    }
-}
-
 ri_to_d3d_state :: proc(ri_state: rc.ResourceState) -> d3d12.RESOURCE_STATES {
     switch ri_state {
         case .Present: return .PRESENT

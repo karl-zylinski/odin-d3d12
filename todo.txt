@@ -4,6 +4,7 @@ TODO:
     X CreateTexture exists now, but when does the upload heap die? It can't be released before copying is done.
     X Make them uploadable and settable from using commands
     * Can we merge their mgmt with constant buffers, some resource concept?
+* We are passing pipeline objects everywhere. Many are just used to get to the cmdlist. Can we do something like where we have a 'current pass' that is being prepared and have the cmdlist in there?
 * ResourceTransition command seems broken. There is no resource to set?
 * Vertex & index buffers bindless
 * Render something with a normal map and albedo
