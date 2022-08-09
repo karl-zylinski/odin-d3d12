@@ -312,7 +312,6 @@ run :: proc() {
     }
 
     ren := create_renderable(&renderer_state, &rc_state, "capsule.obj", shader)
-    //ren2 := create_renderable(&renderer_state, &rc_state, "car.obj", shader)
 
     camera_pos := math.float3 { 0, 0, -1 }
     camera_yaw: f32 = 0
@@ -447,14 +446,7 @@ run :: proc() {
         rc.set_render_target(&cmdlist, pipeline)
 
         {
-    //        ren.position.x = math.cos(t*0.1)*10
             render_renderable(&rc_state, pipeline, &cmdlist, view, &ren)
-        }
-
-        {
-      /*      ren2.position.x = 3
-            ren2.position.z = math.sin(t*0.1)*10
-            render_renderable(&rc_state, pipeline, &cmdlist, view, &ren2)*/
         }
 
         rc.resource_transition(&cmdlist, .RenderTarget, .Present)
@@ -470,12 +462,9 @@ run :: proc() {
         rc.destroy_resource(&cmdlist, fence)
         rc.destroy_resource(&cmdlist, ren.vertex_buffer)
         rc.destroy_resource(&cmdlist, ren.index_buffer)
-//        rc.destroy_resource(&cmdlist, ren2.vertex_buffer)
-  //      rc.destroy_resource(&cmdlist, ren2.index_buffer)
         rc.destroy_resource(&cmdlist, color_const)
         rc.destroy_resource(&cmdlist, sun_pos_const)
         rc.destroy_resource(&cmdlist, ren.mvp_buffer)
-    //    rc.destroy_resource(&cmdlist, ren2.mvp_buffer)
         rc.destroy_resource(&cmdlist, pipeline)
         render_d3d12.submit_command_list(&renderer_state, &cmdlist)
     }
