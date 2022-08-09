@@ -43,12 +43,18 @@ ConstantBufferMemory :: struct {
     size: int,
 }
 
+DelayedDestroy :: struct {
+    res: ^d3d12.IResource,
+    destroy_at_frame: u64,
+}
+
 Pipeline :: struct {
     swapchain: ^dxgi.ISwapChain3,
     queue: ^d3d12.ICommandQueue,
     frame_index: u32,
     depth: ^d3d12.IResource,
     targets: [NUM_RENDERTARGETS]^d3d12.IResource,
+    current_frame: u64,
     dsv_descriptor_heap: ^d3d12.IDescriptorHeap,
     rtv_descriptor_heap: ^d3d12.IDescriptorHeap,
     cbv_descriptor_heap: ^d3d12.IDescriptorHeap,
@@ -58,6 +64,7 @@ Pipeline :: struct {
     constant_buffer_bindless_index: int,
     constant_buffers_destroyed: [dynamic]ConstantBufferMemory,
     command_allocator: ^d3d12.ICommandAllocator,
+    delayed_destroy: [dynamic]DelayedDestroy,
 }
 
 None :: struct {
@@ -328,7 +335,6 @@ submit_command_list :: proc(s: ^State, commands: ^rc.CommandList) {
 
                     texture_upload: ^d3d12.IResource
 
-                    // now we create an upload heap to upload our texture to the GPU
                     hr = s.device->CreateCommittedResource(
                         &d3d12.HEAP_PROPERTIES { Type = .UPLOAD },
                         .NONE, // no flags
@@ -337,11 +343,9 @@ submit_command_list :: proc(s: ^State, commands: ^rc.CommandList) {
                         nil,
                         d3d12.IResource_UUID, (^rawptr)(&texture_upload))
 
-                 //   defer texture_upload->Release()
+                    delay_destruction(p, texture_upload, 2)
 
                     check(hr, s.info_queue, "Failed creating commited resource")
-                    //p.texture_upload->SetName("Texture Buffer Upload Resource Heap")
-                    
 
                     texture_upload_map: rawptr
                     texture_upload->Map(0, &d3d12.RANGE{}, &texture_upload_map)
@@ -1043,6 +1047,7 @@ submit_command_list :: proc(s: ^State, commands: ^rc.CommandList) {
                     hr = p->swapchain->Present1(1, flags, &params)
                     check(hr, s.info_queue, "Present failed")
                     p.frame_index = p->swapchain->GetCurrentBackBufferIndex()
+                    p.current_frame += 1
                 }
 
             case rc.WaitForFence:
@@ -1103,6 +1108,22 @@ update :: proc(s: ^State, pipeline: rt.Handle) {
             }
         } 
     }
+
+    if p, ok := &s.resources[pipeline].resource.(Pipeline); ok {
+        for i := 0; i < len(p.delayed_destroy); {
+            if p.current_frame >= p.delayed_destroy[i].destroy_at_frame {
+                p.delayed_destroy[i].res->Release()
+                p.delayed_destroy[i] = pop(&p.delayed_destroy)
+                continue
+            }
+
+            i += 1
+        }
+    }
+}
+
+delay_destruction :: proc(p: ^Pipeline, res: ^d3d12.IResource, num_frames: int) {
+    append(&p.delayed_destroy, DelayedDestroy { destroy_at_frame = p.current_frame + u64(num_frames), res = res })
 }
 
 check :: proc(res: d3d12.HRESULT, iq: ^d3d12.IInfoQueue, message: string) {
