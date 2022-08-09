@@ -338,9 +338,10 @@ run :: proc() {
     sun_pos_const := rc.create_constant(&ri_state)
 
     first_frame := true
+    texture, texture2: rc.Handle
 
     main_loop: for {
-        t += 0.16
+        t += 0.016
         render_d3d12.new_frame(&renderer_state, pipeline)
 
         camera_rot_x := lin.matrix4_rotate(camera_pitch, lin.Vector3f32{1, 0, 0})
@@ -411,7 +412,7 @@ run :: proc() {
         }
 
         sun_pos := hlsl.float3 {
-            math.cos(t*0.2)*50, 0, math.sin(t*0.2)*50,
+            math.cos(t)*50, 0, math.sin(t)*50,
         }
         render_d3d12.update(&renderer_state, pipeline)
 
@@ -419,16 +420,58 @@ run :: proc() {
         defer delete(cmdlist)
 
         if first_frame == true {
-            f, err := os.open("capsule0.raw")
-            defer os.close(f)
-            fs, _ := os.file_size(f)
-            img := make([]byte, fs, context.temp_allocator)
-            os.read(f, img)
+            {
+                f, err := os.open("capsule0.raw")
+                defer os.close(f)
+                fs, _ := os.file_size(f)
+                img := make([]byte, fs, context.temp_allocator)
+                os.read(f, img)
 
-            texture := rc.create_texture(&ri_state, &cmdlist, pipeline, .R8G8B8A8_UNORM, 2048, 1024, rawptr(&img[0]))
+                texture = rc.create_texture(&ri_state, &cmdlist, pipeline, .R8G8B8A8_UNORM, 2048, 1024, rawptr(&img[0]))
+            }
+
+            {
+                f, err := os.open("capsule1.raw")
+                defer os.close(f)
+                fs, _ := os.file_size(f)
+                img := make([]byte, fs, context.temp_allocator)
+                os.read(f, img)
+
+                texture2 = rc.create_texture(&ri_state, &cmdlist, pipeline, .R8G8B8A8_UNORM, 2048, 1024, rawptr(&img[0]))
+            }
+
+            append(&cmdlist, rc.SetTexture {
+                pipeline = pipeline,
+                shader = shader,
+                name = base.hash("albedo"),
+                texture = texture,
+            })    
+            append(&cmdlist, rc.SetTexture {
+                pipeline = pipeline,
+                shader = shader,
+                name = base.hash("albedo2"),
+                texture = texture2,
+            }) 
 
             first_frame = false
         }
+
+        if lin.fract(t) > 0.5 {
+            append(&cmdlist, rc.SetTexture {
+                pipeline = pipeline,
+                shader = shader,
+                name = base.hash("albedo"),
+                texture = texture,
+            })
+        } else {
+            append(&cmdlist, rc.SetTexture {
+                pipeline = pipeline,
+                shader = shader,
+                name = base.hash("albedo"),
+                texture = texture2,
+            }) 
+        }
+        
 
         append(&cmdlist, rc.SetPipeline {
             handle = pipeline,

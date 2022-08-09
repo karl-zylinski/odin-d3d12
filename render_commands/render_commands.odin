@@ -148,6 +148,13 @@ CreateTexture :: struct {
     pipeline: Handle,
 }
 
+SetTexture :: struct {
+    pipeline: Handle,
+    shader: Handle,
+    name: base.StrHash,
+    texture: Handle,
+}
+
 Command :: union {
     Noop,
     Present,
@@ -171,6 +178,7 @@ Command :: union {
     SetConstant,
     DestroyConstant,
     CreateTexture,
+    SetTexture,
 }
 
 CommandList :: distinct [dynamic]Command

@@ -78,10 +78,15 @@ ShaderConstantBuffer :: struct {
     size: int,
 }
 
+ShaderTexture :: struct {
+    name: base.StrHash,
+}
+
 Shader :: struct {
     pipeline_state: ^d3d12.IPipelineState,
     root_signature: ^d3d12.IRootSignature,
     constant_buffers: [dynamic]ShaderConstantBuffer,
+    textures: [dynamic]ShaderTexture,
 }
 
 Texture :: struct {
@@ -283,6 +288,34 @@ submit_command_list :: proc(s: ^State, commands: ^rc.CommandList) {
             case rc.DestroyResource: {
                 destroy_resource(s, c.handle)
             }
+            case rc.SetTexture: {
+                if shader, ok := &s.resources[c.shader].resource.(Shader); ok {
+                    if p, ok := &s.resources[c.pipeline].resource.(Pipeline); ok {
+                        if t, ok := &s.resources[c.texture].resource.(Texture); ok {
+                           for st, arr_idx in &shader.textures {
+                                if st.name == c.name {
+                                    res_handle: d3d12.CPU_DESCRIPTOR_HANDLE
+                                    p.cbv_descriptor_heap->GetCPUDescriptorHandleForHeapStart(&res_handle)
+                                    res_handle.ptr += uint(s.device->GetDescriptorHandleIncrementSize(.CBV_SRV_UAV) * u32((1 + arr_idx)))
+
+                                    texture_srv_desc := d3d12.SHADER_RESOURCE_VIEW_DESC {
+                                        Format = t.desc.Format,
+                                        ViewDimension = .TEXTURE2D,
+                                        Shader4ComponentMapping = 5768,
+                                    }
+
+                                    texture_srv_desc.Texture2D.MipLevels = 1
+
+                                    s.device->CreateShaderResourceView(t.res, &texture_srv_desc, res_handle)
+                                    check(hr, s.info_queue, "Failed creating commited resource")
+                                    //s.cmdlist->SetGraphicsRoot32BitConstants(1, 1, &cb_info.offset, u32(arr_idx))
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
             case rc.CreateTexture: {
                 if p, ok := &s.resources[c.pipeline].resource.(Pipeline); ok {
                     t: Texture
@@ -304,20 +337,6 @@ submit_command_list :: proc(s: ^State, commands: ^rc.CommandList) {
                     }
 
                     hr = s.device->CreateCommittedResource(&heap_props2, .NONE, &texture_desc, .COPY_DEST, nil, d3d12.IResource_UUID, (^rawptr)(&t.res))
-                    check(hr, s.info_queue, "Failed creating commited resource")
-
-                    texture_srv_desc := d3d12.SHADER_RESOURCE_VIEW_DESC {
-                        Format = texture_desc.Format,
-                        ViewDimension = .TEXTURE2D,
-                        Shader4ComponentMapping = 5768,
-                    }
-
-                    texture_srv_desc.Texture2D.MipLevels = 1
-
-                    res_handle: d3d12.CPU_DESCRIPTOR_HANDLE
-                    p.cbv_descriptor_heap->GetCPUDescriptorHandleForHeapStart(&res_handle)
-                    res_handle.ptr += uint(s.device->GetDescriptorHandleIncrementSize(.CBV_SRV_UAV)) * 1
-                    s.device->CreateShaderResourceView(t.res, &texture_srv_desc, res_handle)
                     check(hr, s.info_queue, "Failed creating commited resource")
 
                     tex_size: u64
@@ -643,6 +662,10 @@ submit_command_list :: proc(s: ^State, commands: ^rc.CommandList) {
 
                 for cb, cb_idx in def.constant_buffers {
                     append(&rd.constant_buffers, ShaderConstantBuffer{ type = cb.type, name = base.hash(cb.name), index = CONSTANT_BUFFER_UNINITIALIZED })
+                }
+
+                for t in def.textures_2d {
+                    append(&rd.textures, ShaderTexture { name = base.hash(t.name) })
                 }
 
                   /* 
@@ -1114,6 +1137,7 @@ update :: proc(s: ^State, pipeline: rt.Handle) {
             if p.current_frame >= p.delayed_destroy[i].destroy_at_frame {
                 p.delayed_destroy[i].res->Release()
                 p.delayed_destroy[i] = pop(&p.delayed_destroy)
+                fmt.println(len(p.delayed_destroy))
                 continue
             }
 
