@@ -21,7 +21,11 @@ CommandList :: struct {
     state: ^State,
 }
 
-// Public interface
+// Public procs
+
+begin_pass :: proc(cmdlist: ^CommandList, pipeline: Handle) {
+    append(&cmdlist.commands, BeginPass { pipeline = pipeline })
+}
 
 destroy_state :: proc(s: ^State) {
     delete(s.freelist)
@@ -30,13 +34,6 @@ destroy_state :: proc(s: ^State) {
 destroy_resource :: proc(cmdlist: ^CommandList, handle: Handle) {
     append(&cmdlist.commands, DestroyResource { handle = handle })
     append(&cmdlist.state.freelist, handle)
-}
-
-create_fence :: proc(cmdlist: ^CommandList) -> Handle {
-    h := get_handle(cmdlist.state)
-    c: Command = CreateFence(h)
-    append(&cmdlist.commands, c)
-    return h
 }
 
 create_buffer :: proc(cmdlist: ^CommandList, desc: BufferDesc, data: rawptr, size: int) -> Handle {
@@ -137,8 +134,9 @@ set_texture :: proc(cmdlist: ^CommandList, pipeline: Handle, shader: Handle, nam
     }) 
 }
 
-draw_call :: proc(cmdlist: ^CommandList, vertex_buffer: Handle, index_buffer: Handle) {
+draw_call :: proc(cmdlist: ^CommandList, pipeline: Handle, vertex_buffer: Handle, index_buffer: Handle) {
     append(&cmdlist.commands, DrawCall {
+        pipeline = pipeline,
         vertex_buffer = vertex_buffer,
         index_buffer = index_buffer,
     })
@@ -175,15 +173,17 @@ set_shader :: proc(cmdlist: ^CommandList, pipeline: Handle, shader: Handle) {
     })
 }
 
-set_scissor :: proc(cmdlist: ^CommandList, rect: math.Rect) {
+set_scissor :: proc(cmdlist: ^CommandList, pipeline: Handle, rect: math.Rect) {
     append(&cmdlist.commands, SetScissor {
-        rect = rect
+        rect = rect,
+        pipeline = pipeline,
     })
 }
 
-set_viewport :: proc(cmdlist: ^CommandList, rect: math.Rect) {
+set_viewport :: proc(cmdlist: ^CommandList, pipeline: Handle, rect: math.Rect) {
     append(&cmdlist.commands, SetViewport {
-        rect = rect
+        rect = rect,
+        pipeline = pipeline,
     })
 }
 
@@ -215,10 +215,6 @@ present :: proc(cmdlist: ^CommandList, pipeline: Handle) {
     append(&cmdlist.commands, Present{ handle = pipeline })
 }
 
-wait_for_fence :: proc(cmdlist: ^CommandList, pipeline: Handle, fence: Handle) {
-    append(&cmdlist.commands, WaitForFence { fence = fence, pipeline = pipeline, })
-}
-
 // Internal types
 
 Noop :: struct {}
@@ -232,11 +228,6 @@ Execute :: struct {
 }
 
 CreateFence :: distinct Handle
-
-WaitForFence :: struct {
-    fence: Handle,
-    pipeline: Handle,
-}
 
 VertexBufferDesc :: struct {
     stride: u32,
@@ -259,6 +250,7 @@ CreateBuffer :: struct {
 }
 
 DrawCall :: struct {
+    pipeline: Handle,
     vertex_buffer: Handle,
     index_buffer: Handle,
 }
@@ -288,11 +280,13 @@ SetRenderTarget :: struct {
 }
 
 SetViewport :: struct {
+    pipeline: Handle,
     rect: math.Rect,
 }
 
 SetScissor :: struct {
     rect: math.Rect,
+    pipeline: Handle,
 }
 
 SetPipeline :: struct {
@@ -355,11 +349,13 @@ SetTexture :: struct {
     texture: Handle,
 }
 
+BeginPass :: struct {
+    pipeline: Handle,
+}
+
 Command :: union {
     Noop,
     Present,
-    CreateFence,
-    WaitForFence,
     Execute,
     ResourceTransition,
     CreateBuffer,
@@ -378,4 +374,5 @@ Command :: union {
     DestroyConstant,
     CreateTexture,
     SetTexture,
+    BeginPass,
 }

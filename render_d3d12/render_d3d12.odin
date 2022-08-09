@@ -52,6 +52,8 @@ Pipeline :: struct {
     frame_index: u32,
     depth: ^d3d12.IResource,
     targets: [NUM_RENDERTARGETS]^d3d12.IResource,
+    backbuffer_fence: ^d3d12.IFence,
+    backbuffer_fence_vals: [NUM_RENDERTARGETS]u64,
     current_frame: u64,
     dsv_descriptor_heap: ^d3d12.IDescriptorHeap,
     rtv_descriptor_heap: ^d3d12.IDescriptorHeap,
@@ -61,8 +63,10 @@ Pipeline :: struct {
     constant_buffer_memory_info: map[rt.Handle]ConstantBufferMemory,
     constant_buffer_bindless_index: int,
     constant_buffers_destroyed: [dynamic]ConstantBufferMemory,
-    command_allocator: ^d3d12.ICommandAllocator,
     delayed_destroy: [dynamic]DelayedDestroy,
+
+    command_allocators: [NUM_RENDERTARGETS]^d3d12.ICommandAllocator,
+    cmdlists: [NUM_RENDERTARGETS]^d3d12.IGraphicsCommandList,
 }
 
 None :: struct {
@@ -113,9 +117,6 @@ State :: struct {
     adapter: ^dxgi.IAdapter1,
     device: ^d3d12.IDevice,
     info_queue: ^d3d12.IInfoQueue,
-    
-    // TODO remove me, use some sort of pool?
-    cmdlist: ^d3d12.IGraphicsCommandList,
 
     wx: i32,
     wy: i32,
@@ -184,8 +185,6 @@ destroy :: proc(s: ^State) {
     }
 
     delete(s.resources)
-    
-    s.cmdlist->Release()
 
     if s.info_queue != nil {
         s.info_queue->Release()
@@ -242,11 +241,19 @@ destroy_resource :: proc(s: ^State, handle: rt.Handle) {
             r.dsv_descriptor_heap->Release()
             r.rtv_descriptor_heap->Release()
             r.cbv_descriptor_heap->Release()
-            r.command_allocator->Release()
             r.constant_buffer_bindless->Release()
             delete(r.constant_buffer_memory_info)
             delete(r.constant_buffers_destroyed)
             delete(r.delayed_destroy)
+
+            for c in r.command_allocators {
+                c->Reset()
+            }
+
+            for s in r.cmdlists {
+                s->Release()    
+            }
+
             res^ = Resource{}
         }
         case ConstantBufferMemory: {
@@ -280,6 +287,10 @@ constant_buffer_type_size :: proc(t: ss.ConstantBufferType) -> int {
     return 0
 }
 
+get_cmdlist :: proc(p: ^Pipeline) -> ^d3d12.IGraphicsCommandList {
+    return p.cmdlists[p.frame_index]
+}
+
 submit_command_list :: proc(s: ^State, cmdlist: ^rc.CommandList) {
     hr: d3d12.HRESULT
     for command in &cmdlist.commands {
@@ -287,6 +298,20 @@ submit_command_list :: proc(s: ^State, cmdlist: ^rc.CommandList) {
             case rc.Noop: {}
             case rc.DestroyResource: {
                 destroy_resource(s, c.handle)
+            }
+            case rc.BeginPass: {
+                if p, ok := &s.resources[c.pipeline].resource.(Pipeline); ok {
+                    completed_fence_value := p.backbuffer_fence->GetCompletedValue()
+                    if completed_fence_value < p.backbuffer_fence_vals[p.frame_index] {
+                        p.backbuffer_fence->SetEventOnCompletion(p.backbuffer_fence_vals[p.frame_index], nil)
+                    }
+
+                    hr = p.command_allocators[p.frame_index]->Reset()
+                    check(hr, s.info_queue, "Failed resetting command allocator")
+
+                    hr = get_cmdlist(p)->Reset(p.command_allocators[p.frame_index], nil)
+                    check(hr, s.info_queue, "Failed to reset command list")
+                }
             }
             case rc.SetTexture: {
                 if shader, ok := &s.resources[c.shader].resource.(Shader); ok {
@@ -373,7 +398,8 @@ submit_command_list :: proc(s: ^State, cmdlist: ^rc.CommandList) {
 
                     s.device->GetCopyableFootprints(&texture_desc, 0, 1, 0, &copy_location.PlacedFootprint, nil, nil, nil);
 
-                    s.cmdlist->CopyTextureRegion(
+                    cmdlist := get_cmdlist(p)
+                    cmdlist->CopyTextureRegion(
                             &d3d12.TEXTURE_COPY_LOCATION { pResource = t.res },
                             0, 0, 0, 
                             &copy_location,
@@ -391,7 +417,7 @@ submit_command_list :: proc(s: ^State, cmdlist: ^rc.CommandList) {
                         Subresource = d3d12.RESOURCE_BARRIER_ALL_SUBRESOURCES,
                     }
 
-                    s.cmdlist->ResourceBarrier(1, &b);
+                    cmdlist->ResourceBarrier(1, &b);
 
                     set_resource(s, c.handle, t)
 
@@ -401,11 +427,12 @@ submit_command_list :: proc(s: ^State, cmdlist: ^rc.CommandList) {
             case rc.SetShader: {
                 if shader, ok := &s.resources[c.handle].resource.(Shader); ok {
                     if p, ok := &s.resources[c.pipeline].resource.(Pipeline); ok {
-                        s.cmdlist->SetGraphicsRootSignature(shader.root_signature)
+                        cmdlist := get_cmdlist(p)
+                        cmdlist->SetGraphicsRootSignature(shader.root_signature)
                         table_handle: d3d12.GPU_DESCRIPTOR_HANDLE
                         p.cbv_descriptor_heap->GetGPUDescriptorHandleForHeapStart(&table_handle)
-                        s.cmdlist->SetGraphicsRootDescriptorTable(0, table_handle)
-                        s.cmdlist->SetPipelineState(shader.pipeline_state)
+                        cmdlist->SetGraphicsRootDescriptorTable(0, table_handle)
+                        cmdlist->SetPipelineState(shader.pipeline_state)
                     }
                 }
             }
@@ -433,7 +460,7 @@ submit_command_list :: proc(s: ^State, cmdlist: ^rc.CommandList) {
                         if cb_info, ok := p.constant_buffer_memory_info[c.constant]; ok {
                             for cb, arr_idx in &shader.constant_buffers {
                                 if cb.name == c.name {
-                                    s.cmdlist->SetGraphicsRoot32BitConstants(1, 1, &cb_info.offset, u32(arr_idx))
+                                    get_cmdlist(p)->SetGraphicsRoot32BitConstants(1, 1, &cb_info.offset, u32(arr_idx))
                                     break;
                                 }
                             }
@@ -607,17 +634,23 @@ submit_command_list :: proc(s: ^State, cmdlist: ^rc.CommandList) {
                     s.device->CreateDepthStencilView(p.depth, &dsv_desc, heap_handle_dsv);
                 }
 
-                // The command allocator is used to create the commandlist that is used to tell the GPU what to draw
-                hr = s.device->CreateCommandAllocator(.DIRECT, d3d12.ICommandAllocator_UUID, (^rawptr)(&p.command_allocator))
-                check(hr, s.info_queue, "Failed creating command allocator")
 
-                // Create the commandlist that is reused further down.
-                hr = s.device->CreateCommandList(0, .DIRECT, p.command_allocator, nil, d3d12.ICommandList_UUID, (^rawptr)(&s.cmdlist))
-                check(hr, s.info_queue, "Failed to create command list")
-                hr = s.cmdlist->Close()
-                check(hr, s.info_queue, "Failed to close command list")
+                for i := 0; i < NUM_RENDERTARGETS; i += 1 {
+                    hr = s.device->CreateCommandAllocator(.DIRECT, d3d12.ICommandAllocator_UUID, (^rawptr)(&p.command_allocators[i]))
+                    check(hr, s.info_queue, "Failed creating command allocator")
+
+                    hr = s.device->CreateCommandList(0, .DIRECT, p.command_allocators[i], nil, d3d12.ICommandList_UUID, (^rawptr)(&p.cmdlists[i]))
+                    check(hr, s.info_queue, "Failed to create command list")
+                    hr = p.cmdlists[i]->Close()
+                    check(hr, s.info_queue, "Failed to close command list")
+                }
 
                 p.constant_buffer_memory_info = make(map[rt.Handle]ConstantBufferMemory)
+
+                {
+                    hr = s.device->CreateFence(0, .NONE, d3d12.IFence_UUID, (^rawptr)(&p.backbuffer_fence))
+                    check(hr, s.info_queue, "Failed to create fence")
+                }
 
                 set_resource(s, c.handle, p)
             }
@@ -867,20 +900,6 @@ submit_command_list :: proc(s: ^State, cmdlist: ^rc.CommandList) {
                 ss.free_shader(&def)
                 set_resource(s, c.handle, rd)
             }
-            case rc.CreateFence: {
-                f: Fence
-                hr = s.device->CreateFence(f.value, .NONE, d3d12.IFence_UUID, (^rawptr)(&f.fence))
-                check(hr, s.info_queue, "Failed to create fence")
-                f.value += 1
-                manual_reset: dxgi.BOOL = false
-                initial_state: dxgi.BOOL = false
-                f.event = windows.CreateEventW(nil, manual_reset, initial_state, nil)
-                if f.event == nil {
-                    fmt.println("Failed to create fence event")
-                }
-
-                set_resource(s, rt.Handle(c), f)
-            }
             case rc.CreateBuffer: {
                 // The position and color data for the triangle's vertices go together per-vertex
                 heap_props := d3d12.HEAP_PROPERTIES {
@@ -937,26 +956,30 @@ submit_command_list :: proc(s: ^State, cmdlist: ^rc.CommandList) {
 
             case rc.SetPipeline:
                 if p, ok := &s.resources[c.handle].resource.(Pipeline); ok {
-                    s.cmdlist->SetDescriptorHeaps(1, &p.cbv_descriptor_heap);
+                    get_cmdlist(p)->SetDescriptorHeaps(1, &p.cbv_descriptor_heap);
                 }
 
             case rc.SetScissor:
-                s.cmdlist->RSSetScissorRects(1, &{
-                    left = i32(c.rect.x),
-                    top = i32(c.rect.y),
-                    right = i32(c.rect.x + c.rect.w),
-                    bottom = i32(c.rect.y + c.rect.h),
-                })
+                if p, ok := &s.resources[c.pipeline].resource.(Pipeline); ok {
+                    get_cmdlist(p)->RSSetScissorRects(1, &{
+                        left = i32(c.rect.x),
+                        top = i32(c.rect.y),
+                        right = i32(c.rect.x + c.rect.w),
+                        bottom = i32(c.rect.y + c.rect.h),
+                    })
+                }
 
             case rc.SetViewport:
-                s.cmdlist->RSSetViewports(1, &{
-                    TopLeftX = c.rect.x,
-                    TopLeftY = c.rect.y,
-                    Width = c.rect.w,
-                    Height = c.rect.h,
-                    MinDepth = 0,
-                    MaxDepth = 1,
-                })
+                if p, ok := &s.resources[c.pipeline].resource.(Pipeline); ok {
+                    get_cmdlist(p)->RSSetViewports(1, &{
+                        TopLeftX = c.rect.x,
+                        TopLeftY = c.rect.y,
+                        Width = c.rect.w,
+                        Height = c.rect.h,
+                        MinDepth = 0,
+                        MaxDepth = 1,
+                    })
+                }
 
             case rc.SetRenderTarget:
                 if p, ok := &s.resources[c.render_target.pipeline].resource.(Pipeline); ok {
@@ -970,7 +993,7 @@ submit_command_list :: proc(s: ^State, cmdlist: ^rc.CommandList) {
 
                     dsv_handle: d3d12.CPU_DESCRIPTOR_HANDLE
                     p.dsv_descriptor_heap->GetCPUDescriptorHandleForHeapStart(&dsv_handle);
-                    s.cmdlist->OMSetRenderTargets(1, &rtv_handle, false, &dsv_handle)
+                    get_cmdlist(p)->OMSetRenderTargets(1, &rtv_handle, false, &dsv_handle)
                 }
 
             case rc.ClearRenderTarget: 
@@ -984,28 +1007,32 @@ submit_command_list :: proc(s: ^State, cmdlist: ^rc.CommandList) {
                     }
 
                     cc := c.clear_color
-                    s.cmdlist->ClearRenderTargetView(rtv_handle, (^[4]f32)(&cc), 0, nil)
+                    cmdlist := get_cmdlist(p)
+                    cmdlist->ClearRenderTargetView(rtv_handle, (^[4]f32)(&cc), 0, nil)
                     dsv_handle: d3d12.CPU_DESCRIPTOR_HANDLE
                     p.dsv_descriptor_heap->GetCPUDescriptorHandleForHeapStart(&dsv_handle);
-                    s.cmdlist->ClearDepthStencilView(dsv_handle, .DEPTH, 1.0, 0, 0, nil);
+                    cmdlist->ClearDepthStencilView(dsv_handle, .DEPTH, 1.0, 0, 0, nil);
                 }
 
             case rc.DrawCall:
-                vb_view: d3d12.VERTEX_BUFFER_VIEW
-                ib_view: d3d12.INDEX_BUFFER_VIEW
-                if b, ok := &s.resources[c.vertex_buffer].resource.(Buffer); ok {
-                    vb_view, _ = b.view.(d3d12.VERTEX_BUFFER_VIEW)
-                }
+                if p, ok := &s.resources[c.pipeline].resource.(Pipeline); ok {
+                    vb_view: d3d12.VERTEX_BUFFER_VIEW
+                    ib_view: d3d12.INDEX_BUFFER_VIEW
+                    if b, ok := &s.resources[c.vertex_buffer].resource.(Buffer); ok {
+                        vb_view, _ = b.view.(d3d12.VERTEX_BUFFER_VIEW)
+                    }
 
-                if b, ok := &s.resources[c.index_buffer].resource.(Buffer); ok {
-                    ib_view, _ = b.view.(d3d12.INDEX_BUFFER_VIEW)
-                }
+                    if b, ok := &s.resources[c.index_buffer].resource.(Buffer); ok {
+                        ib_view, _ = b.view.(d3d12.INDEX_BUFFER_VIEW)
+                    }
 
-                num_indices := ib_view.SizeInBytes / 4
-                s.cmdlist->IASetPrimitiveTopology(.TRIANGLELIST)
-                s.cmdlist->IASetVertexBuffers(0, 1, &vb_view)
-                s.cmdlist->IASetIndexBuffer(&ib_view)
-                s.cmdlist->DrawIndexedInstanced(num_indices, 1, 0, 0, 0)
+                    num_indices := ib_view.SizeInBytes / 4
+                    cmdlist := get_cmdlist(p)
+                    cmdlist->IASetPrimitiveTopology(.TRIANGLELIST)
+                    cmdlist->IASetVertexBuffers(0, 1, &vb_view)
+                    cmdlist->IASetIndexBuffer(&ib_view)
+                    cmdlist->DrawIndexedInstanced(num_indices, 1, 0, 0, 0)
+                }
 
             case rc.ResourceTransition:
                 if p, ok := &s.resources[c.render_target.pipeline].resource.(Pipeline); ok {
@@ -1021,14 +1048,15 @@ submit_command_list :: proc(s: ^State, cmdlist: ^rc.CommandList) {
                         Subresource = d3d12.RESOURCE_BARRIER_ALL_SUBRESOURCES,
                     }
 
-                    s.cmdlist->ResourceBarrier(1, &b);
+                    get_cmdlist(p)->ResourceBarrier(1, &b);
                 }
 
             case rc.Execute:
                 if p, ok := &s.resources[c.pipeline].resource.(Pipeline); ok {
-                    hr = s.cmdlist->Close()
+                    cmdlist := get_cmdlist(p)
+                    hr = cmdlist->Close()
                     check(hr, s.info_queue, "Failed to close command list")
-                    cmdlists := [?]^d3d12.IGraphicsCommandList { s.cmdlist }
+                    cmdlists := [?]^d3d12.IGraphicsCommandList { cmdlist }
                     p.queue->ExecuteCommandLists(len(cmdlists), (^^d3d12.ICommandList)(&cmdlists[0]))
                 }
             
@@ -1036,29 +1064,12 @@ submit_command_list :: proc(s: ^State, cmdlist: ^rc.CommandList) {
                 if p, ok := &s.resources[c.handle].resource.(Pipeline); ok {
                     flags: u32
                     params: dxgi.PRESENT_PARAMETERS
-                    hr = p->swapchain->Present1(1, flags, &params)
+                    hr = p->swapchain->Present1(0, flags, &params)
                     check(hr, s.info_queue, "Present failed")
-                    p.frame_index = p->swapchain->GetCurrentBackBufferIndex()
                     p.current_frame += 1
-                }
-
-            case rc.WaitForFence:
-                if f, ok := &s.resources[c.fence].resource.(Fence); ok {
-                    current_fence_value := f.value
-
-                    if p, ok := &s.resources[c.pipeline].resource.(Pipeline); ok {
-                        hr = p.queue->Signal(f.fence, current_fence_value)
-                        check(hr, s.info_queue, "Failed to signal fence")
-                    }
-
-                    f.value += 1
-                    completed := f.fence->GetCompletedValue()
-
-                    if completed < current_fence_value {
-                        hr = f.fence->SetEventOnCompletion(current_fence_value, f.event)
-                        check(hr, s.info_queue, "Failed to set event on completion flag")
-                        windows.WaitForSingleObject(f.event, windows.INFINITE);
-                    }
+                    p.queue->Signal(p.backbuffer_fence, p.current_frame)
+                    p.backbuffer_fence_vals[p.frame_index] = p.current_frame 
+                    p.frame_index = p->swapchain->GetCurrentBackBufferIndex()
                 }
         }
     }
@@ -1068,12 +1079,6 @@ submit_command_list :: proc(s: ^State, cmdlist: ^rc.CommandList) {
 
 new_frame :: proc(s: ^State, pipeline: rt.Handle) {
     if p, ok := &s.resources[pipeline].resource.(Pipeline); ok {
-        hr: d3d12.HRESULT
-        hr = p.command_allocator->Reset()
-        check(hr, s.info_queue, "Failed resetting command allocator")
-
-        hr = s.cmdlist->Reset(p.command_allocator, nil)
-        check(hr, s.info_queue, "Failed to reset command list")
     }
 }
 
@@ -1099,7 +1104,6 @@ update :: proc(s: ^State, pipeline: rt.Handle) {
             if p.current_frame >= p.delayed_destroy[i].destroy_at_frame {
                 p.delayed_destroy[i].res->Release()
                 p.delayed_destroy[i] = pop(&p.delayed_destroy)
-                fmt.println(len(p.delayed_destroy))
                 continue
             }
 

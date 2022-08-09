@@ -264,7 +264,7 @@ render_renderable :: proc(rc_state: ^rc.State, pipeline: render_types.Handle, cm
 
     rc.upload_constant(cmdlist, pipeline, ren.mvp_buffer, &mvp)
     rc.set_constant(cmdlist, pipeline, ren.shader, base.hash("mvp"), ren.mvp_buffer)
-    rc.draw_call(cmdlist, ren.vertex_buffer, ren.index_buffer)
+    rc.draw_call(cmdlist, pipeline, ren.vertex_buffer, ren.index_buffer)
 }
 
 near :: f32(0.01)
@@ -298,7 +298,6 @@ run :: proc() {
     window_handle := dxgi.HWND(window_info.info.win.window)
     renderer_state := render_d3d12.create(wx, wy, window_handle)
     rc_state: rc.State
-    fence: render_types.Handle
     pipeline: render_types.Handle
     shader: render_types.Handle
 
@@ -307,7 +306,6 @@ run :: proc() {
         pipeline = rc.create_pipeline(&cmdlist, f32(wx), f32(wy), render_types.WindowHandle(uintptr(window_handle)))
         shader_def := shader_system.load_shader("shader.shader")
         shader = rc.create_shader(&cmdlist, shader_def)
-        fence = rc.create_fence(&cmdlist)
         render_d3d12.submit_command_list(&renderer_state, &cmdlist)
     }
 
@@ -403,6 +401,9 @@ run :: proc() {
 
         cmdlist := rc.create_command_list(&rc_state)
 
+
+        rc.begin_pass(&cmdlist, pipeline)
+
         if first_frame == true {
             {
                 f, err := os.open("capsule0.raw")
@@ -438,8 +439,8 @@ run :: proc() {
         rc.upload_constant(&cmdlist, pipeline, color_const, &color)
         rc.set_constant(&cmdlist, pipeline, shader, base.hash("color"), color_const)
 
-        rc.set_scissor(&cmdlist, { w = f32(wx), h = f32(wy), })
-        rc.set_viewport(&cmdlist, { w = f32(wx), h = f32(wy), })
+        rc.set_scissor(&cmdlist, pipeline, { w = f32(wx), h = f32(wy), })
+        rc.set_viewport(&cmdlist, pipeline, { w = f32(wx), h = f32(wy), })
 
         rc.resource_transition(&cmdlist, .Present, .RenderTarget)
         rc.clear_render_target(&cmdlist, pipeline, {0, 0, 0, 1})
@@ -452,14 +453,12 @@ run :: proc() {
         rc.resource_transition(&cmdlist, .RenderTarget, .Present)
         rc.execute(&cmdlist, pipeline)
         rc.present(&cmdlist, pipeline)
-        rc.wait_for_fence(&cmdlist, pipeline, fence)
         render_d3d12.submit_command_list(&renderer_state, &cmdlist)
     }
 
     {
         cmdlist := rc.create_command_list(&rc_state)
         rc.destroy_resource(&cmdlist, shader)
-        rc.destroy_resource(&cmdlist, fence)
         rc.destroy_resource(&cmdlist, ren.vertex_buffer)
         rc.destroy_resource(&cmdlist, ren.index_buffer)
         rc.destroy_resource(&cmdlist, color_const)
