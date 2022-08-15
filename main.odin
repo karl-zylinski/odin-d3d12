@@ -423,13 +423,13 @@ run :: proc() {
                 texture2 = rc.create_texture(&cmdlist, pipeline, .R8G8B8A8_UNORM, 2048, 1024, rawptr(&img[0]))
             }
 
-            rc.set_texture(&cmdlist, pipeline, shader, base.hash("albedo"), texture)
-            rc.set_texture(&cmdlist, pipeline, shader, base.hash("albedo2"), texture2)
 
             first_frame = false
         }
 
+
         rc.set_texture(&cmdlist, pipeline, shader, base.hash("albedo"), math.fract(t) > 0.5 ? texture : texture2)
+        rc.set_texture(&cmdlist, pipeline, shader, base.hash("albedo2"), texture2)
         rc.set_pipeline(&cmdlist, pipeline)
         rc.set_shader(&cmdlist, pipeline, shader)
         rc.upload_constant(&cmdlist, pipeline, sun_pos_const, &sun_pos)

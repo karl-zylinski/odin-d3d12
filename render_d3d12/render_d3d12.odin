@@ -17,6 +17,10 @@ import "../base"
 NUM_RENDERTARGETS :: 2
 CONSTANT_BUFFER_UNINITIALIZED :: 0xFFFFFFFF
 
+CBV_HEAP_SIZE :: 1000
+RTV_HEAP_SIZE :: 100
+DSV_HEAP_SIZE :: 10
+
 BufferView :: union {
     d3d12.VERTEX_BUFFER_VIEW,
     d3d12.INDEX_BUFFER_VIEW,
@@ -59,16 +63,17 @@ Pipeline :: struct {
     depth: ^d3d12.IResource,
     backbuffer_fence: ^d3d12.IFence,
     num_backbuffer_presents: u64,
-    dsv_descriptor_heap: ^d3d12.IDescriptorHeap,
-    rtv_descriptor_heap: ^d3d12.IDescriptorHeap,
-    cbv_descriptor_heap: ^d3d12.IDescriptorHeap,
     constant_buffer_bindless: ^d3d12.IResource,
     constant_buffer_bindless_map: rawptr,
     constant_buffer_memory_info: map[rt.Handle]ConstantBufferMemory,
     constant_buffer_bindless_index: int,
     constant_buffers_destroyed: [dynamic]ConstantBufferMemory,
 
+    constant_buffer_buffer_desc: d3d12.CONSTANT_BUFFER_VIEW_DESC,
+
     backbuffer_states: [NUM_RENDERTARGETS]BackbufferState,
+
+    dsv_desc: d3d12.DEPTH_STENCIL_VIEW_DESC,
 }
 
 None :: struct {
@@ -127,6 +132,60 @@ State :: struct {
     delayed_destroy: [dynamic]DelayedDestroy,
 
     frame_idx: u64,
+
+    cbv_heap: ^d3d12.IDescriptorHeap,
+
+    // This one is advanced manually since we must match the root signature, so it is managaed a bit more manually.
+    cbv_heap_start: int,
+
+    rtv_heap: ^d3d12.IDescriptorHeap,
+    rtv_heap_start: int,
+
+    dsv_heap: ^d3d12.IDescriptorHeap,
+    dsv_heap_start: int,
+}
+
+get_cbv_handle :: proc(s: ^State, offset: int) -> d3d12.CPU_DESCRIPTOR_HANDLE {
+    cbv_handle: d3d12.CPU_DESCRIPTOR_HANDLE
+
+    start := s.cbv_heap_start
+    diff := start + offset - CBV_HEAP_SIZE
+
+    if diff >= 0 {
+        start = diff
+    } else {
+        start += offset
+    }
+
+    s.cbv_heap->GetCPUDescriptorHandleForHeapStart(&cbv_handle)
+    cbv_handle.ptr += uint(s.device->GetDescriptorHandleIncrementSize(.CBV_SRV_UAV) * u32(start))
+    return cbv_handle
+}
+
+next_rtv_handle :: proc(s: ^State) -> d3d12.CPU_DESCRIPTOR_HANDLE {
+    rtv_handle: d3d12.CPU_DESCRIPTOR_HANDLE
+    s.rtv_heap->GetCPUDescriptorHandleForHeapStart(&rtv_handle)
+    rtv_handle.ptr += uint(s.device->GetDescriptorHandleIncrementSize(.RTV) * u32(s.rtv_heap_start))
+    s.rtv_heap_start += 1
+
+    if s.rtv_heap_start >= RTV_HEAP_SIZE {
+        s.rtv_heap_start = 0
+    }
+
+    return rtv_handle
+}
+
+next_dsv_handle :: proc(s: ^State) -> d3d12.CPU_DESCRIPTOR_HANDLE {
+    dsv_handle: d3d12.CPU_DESCRIPTOR_HANDLE
+    s.dsv_heap->GetCPUDescriptorHandleForHeapStart(&dsv_handle)
+    dsv_handle.ptr += uint(s.device->GetDescriptorHandleIncrementSize(.DSV) * u32(s.dsv_heap_start))
+    s.dsv_heap_start += 1
+
+    if s.dsv_heap_start >= DSV_HEAP_SIZE {
+        s.dsv_heap_start = 0
+    }
+
+    return dsv_handle
 }
 
 create :: proc(wx: i32, wy: i32, window_handle: dxgi.HWND) -> (s: State) {
@@ -179,6 +238,41 @@ create :: proc(wx: i32, wy: i32, window_handle: dxgi.HWND) -> (s: State) {
         //check(hr, s.info_queue, "Failed getting info queue")
     }
 
+    {
+        desc := d3d12.DESCRIPTOR_HEAP_DESC {
+            NumDescriptors = RTV_HEAP_SIZE,
+            Type = .RTV,
+            Flags = .NONE,
+        };
+
+        hr = s.device->CreateDescriptorHeap(&desc, d3d12.IDescriptorHeap_UUID, (^rawptr)(&s.rtv_heap))
+        check(hr, s.info_queue, "Failed creating descriptor heap")
+    }
+
+    {
+        desc := d3d12.DESCRIPTOR_HEAP_DESC {
+            NumDescriptors = DSV_HEAP_SIZE,
+            Type = .DSV,
+        };
+
+        hr = s.device->CreateDescriptorHeap(&desc, d3d12.IDescriptorHeap_UUID, (^rawptr)(&s.dsv_heap))
+        check(hr, s.info_queue, "Failed creating DSV descriptor heap")
+    }
+
+
+    {
+        desc := d3d12.DESCRIPTOR_HEAP_DESC {
+            NumDescriptors = CBV_HEAP_SIZE,
+            Type = .CBV_SRV_UAV,
+            Flags = .SHADER_VISIBLE,
+        };
+
+        hr = s.device->CreateDescriptorHeap(&desc, d3d12.IDescriptorHeap_UUID, (^rawptr)(&s.cbv_heap))
+        check(hr, s.info_queue, "Failed creating cbv descriptor heap")
+    }
+
+
+
     return s
 }
 
@@ -202,6 +296,9 @@ destroy :: proc(s: ^State) {
     s.device->Release()
     s.adapter->Release()
     s.factory->Release()
+    s.rtv_heap->Release()
+    s.dsv_heap->Release()
+    s.cbv_heap->Release()
 
     delete(s.delayed_destroy)
 }
@@ -243,9 +340,7 @@ destroy_resource :: proc(s: ^State, handle: rt.Handle) {
             r.swapchain->Release()
             r.queue->Release()
             r.depth->Release()
-            r.dsv_descriptor_heap->Release()
-            r.rtv_descriptor_heap->Release()
-            r.cbv_descriptor_heap->Release()
+            
             r.constant_buffer_bindless->Release()
             delete(r.constant_buffer_memory_info)
             delete(r.constant_buffers_destroyed)
@@ -253,7 +348,6 @@ destroy_resource :: proc(s: ^State, handle: rt.Handle) {
             for bs in r.backbuffer_states {
                 bs.cmdallocator->Reset()
                 bs.cmdlist->Release()    
-                bs.render_target->Release()
             }
 
             res^ = Resource{}
@@ -334,9 +428,7 @@ submit_command_list :: proc(s: ^State, commandlist: ^rc.CommandList) {
                         if t, ok := &s.resources[c.texture].resource.(Texture); ok {
                            for st, arr_idx in &shader.textures {
                                 if st.name == c.name {
-                                    res_handle: d3d12.CPU_DESCRIPTOR_HANDLE
-                                    p.cbv_descriptor_heap->GetCPUDescriptorHandleForHeapStart(&res_handle)
-                                    res_handle.ptr += uint(s.device->GetDescriptorHandleIncrementSize(.CBV_SRV_UAV) * u32((1 + arr_idx)))
+                                    res_handle := get_cbv_handle(s, (1 + arr_idx))
 
                                     texture_srv_desc := d3d12.SHADER_RESOURCE_VIEW_DESC {
                                         Format = t.desc.Format,
@@ -449,9 +541,15 @@ submit_command_list :: proc(s: ^State, commandlist: ^rc.CommandList) {
                             break
                         }
 
+                        res_handle := get_cbv_handle(s, 0)
+                        s.device->CreateConstantBufferView(&p.constant_buffer_buffer_desc, res_handle)
+
                         cmdlist->SetGraphicsRootSignature(shader.root_signature)
                         table_handle: d3d12.GPU_DESCRIPTOR_HANDLE
-                        p.cbv_descriptor_heap->GetGPUDescriptorHandleForHeapStart(&table_handle)
+                        s.cbv_heap->GetGPUDescriptorHandleForHeapStart(&table_handle)
+
+                        table_handle.ptr += u64(s.device->GetDescriptorHandleIncrementSize(.CBV_SRV_UAV) * u32(s.cbv_heap_start))
+
                         cmdlist->SetGraphicsRootDescriptorTable(0, table_handle)
                         cmdlist->SetPipelineState(shader.pipeline_state)
                     }
@@ -535,36 +633,12 @@ submit_command_list :: proc(s: ^State, commandlist: ^rc.CommandList) {
 
                 frame_index := p.swapchain->GetCurrentBackBufferIndex()
 
-                // Descripors describe the GPU data and are allocated from a Descriptor Heap
-                {
-                    desc := d3d12.DESCRIPTOR_HEAP_DESC {
-                        NumDescriptors = 100,
-                        Type = .RTV,
-                        Flags = .NONE,
-                    };
-
-                    hr = s.device->CreateDescriptorHeap(&desc, d3d12.IDescriptorHeap_UUID, (^rawptr)(&p.rtv_descriptor_heap))
-                    check(hr, s.info_queue, "Failed creating descriptor heap")
-                }
-
-
                 // Fetch the two render targets from the swapchain
                 {
                     for i :u32= 0; i < NUM_RENDERTARGETS; i += 1 {
                         hr = p.swapchain->GetBuffer(i, d3d12.IResource_UUID, (^rawptr)(&p.backbuffer_states[i].render_target))
                         check(hr, s.info_queue, "Failed getting render target")
                     }
-                }
-
-                {
-                    desc := d3d12.DESCRIPTOR_HEAP_DESC {
-                        NumDescriptors = 33,
-                        Type = .CBV_SRV_UAV,
-                        Flags = .SHADER_VISIBLE,
-                    };
-
-                    hr = s.device->CreateDescriptorHeap(&desc, d3d12.IDescriptorHeap_UUID, (^rawptr)(&p.cbv_descriptor_heap))
-                    check(hr, s.info_queue, "Failed creating cbv descriptor heap")
                 }
 
                 res_handle: d3d12.CPU_DESCRIPTOR_HANDLE
@@ -590,24 +664,10 @@ submit_command_list :: proc(s: ^State, commandlist: ^rc.CommandList) {
                     r: d3d12.RANGE = {}
                     p.constant_buffer_bindless->Map(0, &r, (^rawptr)(&p.constant_buffer_bindless_map))
 
-                    cbv_desc := d3d12.CONSTANT_BUFFER_VIEW_DESC {
+                    p.constant_buffer_buffer_desc = d3d12.CONSTANT_BUFFER_VIEW_DESC {
                         SizeInBytes = 1024,
                         BufferLocation = p.constant_buffer_bindless->GetGPUVirtualAddress(),
                     }
-
-                    p.cbv_descriptor_heap->GetCPUDescriptorHandleForHeapStart(&res_handle)
-                    s.device->CreateConstantBufferView(&cbv_desc, res_handle)
-                }
-
-                 // Descripors describe the GPU data and are allocated from a Descriptor Heap
-                {
-                    desc := d3d12.DESCRIPTOR_HEAP_DESC {
-                        NumDescriptors = 1,
-                        Type = .DSV,
-                    };
-
-                    hr = s.device->CreateDescriptorHeap(&desc, d3d12.IDescriptorHeap_UUID, (^rawptr)(&p.dsv_descriptor_heap))
-                    check(hr, s.info_queue, "Failed creating DSV descriptor heap")
                 }
 
                 {
@@ -642,16 +702,11 @@ submit_command_list :: proc(s: ^State, commandlist: ^rc.CommandList) {
                         (^rawptr)(&p.depth),
                     );
 
-                    dsv_desc := d3d12.DEPTH_STENCIL_VIEW_DESC {
+                    p.dsv_desc = {
                         Format = .D32_FLOAT,
                         ViewDimension = .TEXTURE2D,
                     }
-
-                    heap_handle_dsv: d3d12.CPU_DESCRIPTOR_HANDLE
-                    p.dsv_descriptor_heap->GetCPUDescriptorHandleForHeapStart(&heap_handle_dsv)
-                    s.device->CreateDepthStencilView(p.depth, &dsv_desc, heap_handle_dsv);
                 }
-
 
                 for i := 0; i < NUM_RENDERTARGETS; i += 1 {
                     hr = s.device->CreateCommandAllocator(.DIRECT, d3d12.ICommandAllocator_UUID, (^rawptr)(&p.backbuffer_states[i].cmdallocator))
@@ -978,7 +1033,7 @@ submit_command_list :: proc(s: ^State, commandlist: ^rc.CommandList) {
                         break
                     }
 
-                    cmdlist->SetDescriptorHeaps(1, &p.cbv_descriptor_heap);
+                    cmdlist->SetDescriptorHeaps(1, &s.cbv_heap);
                 }
             }
 
@@ -1016,15 +1071,13 @@ submit_command_list :: proc(s: ^State, commandlist: ^rc.CommandList) {
                         break
                     }
 
-                    rtv_handle: d3d12.CPU_DESCRIPTOR_HANDLE
-                    p.rtv_descriptor_heap->GetCPUDescriptorHandleForHeapStart(&rtv_handle)
+                    rtv_handle := next_rtv_handle(s)
                     frame_index := p->swapchain->GetCurrentBackBufferIndex()
                     rt := p.backbuffer_states[frame_index].render_target
-                    rtv_handle.ptr += uint(frame_index * s.device->GetDescriptorHandleIncrementSize(.RTV))
                     s.device->CreateRenderTargetView(rt, nil, rtv_handle);
 
-                    dsv_handle: d3d12.CPU_DESCRIPTOR_HANDLE
-                    p.dsv_descriptor_heap->GetCPUDescriptorHandleForHeapStart(&dsv_handle);
+                    dsv_handle := next_dsv_handle(s)
+                    s.device->CreateDepthStencilView(p.depth, &p.dsv_desc, dsv_handle);
                     cmdlist->OMSetRenderTargets(1, &rtv_handle, false, &dsv_handle)
                 }
 
@@ -1034,17 +1087,14 @@ submit_command_list :: proc(s: ^State, commandlist: ^rc.CommandList) {
                         break
                     }
 
-                    rtv_handle: d3d12.CPU_DESCRIPTOR_HANDLE
-                    p.rtv_descriptor_heap->GetCPUDescriptorHandleForHeapStart(&rtv_handle)
+                    rtv_handle := next_rtv_handle(s)
                     frame_index := p->swapchain->GetCurrentBackBufferIndex()
                     rt := p.backbuffer_states[frame_index].render_target
-                    rtv_handle.ptr += uint(frame_index * s.device->GetDescriptorHandleIncrementSize(.RTV))
                     s.device->CreateRenderTargetView(rt, nil, rtv_handle);
-
-                    cc := c.clear_color
-                    cmdlist->ClearRenderTargetView(rtv_handle, (^[4]f32)(&cc), 0, nil)
-                    dsv_handle: d3d12.CPU_DESCRIPTOR_HANDLE
-                    p.dsv_descriptor_heap->GetCPUDescriptorHandleForHeapStart(&dsv_handle);
+                    cmdlist->ClearRenderTargetView(rtv_handle, (^[4]f32)(&c.clear_color), 0, nil)
+                    
+                    dsv_handle := next_dsv_handle(s)
+                    s.device->CreateDepthStencilView(p.depth, &p.dsv_desc, dsv_handle);
                     cmdlist->ClearDepthStencilView(dsv_handle, .DEPTH, 1.0, 0, 0, nil);
                 }
 
@@ -1103,6 +1153,12 @@ submit_command_list :: proc(s: ^State, commandlist: ^rc.CommandList) {
                     check(hr, s.info_queue, "Failed to close command list")
                     cmdlists := [?]^d3d12.IGraphicsCommandList { cmdlist }
                     p.queue->ExecuteCommandLists(len(cmdlists), (^^d3d12.ICommandList)(&cmdlists[0]))
+
+                    s.cbv_heap_start += 33
+
+                    if s.cbv_heap_start > CBV_HEAP_SIZE {
+                        s.cbv_heap_start = 0
+                    }
                 }
             
             case rc.Present:
