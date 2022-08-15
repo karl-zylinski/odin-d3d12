@@ -69,7 +69,7 @@ Pipeline :: struct {
     constant_buffer_bindless_index: int,
     constant_buffers_destroyed: [dynamic]ConstantBufferMemory,
 
-    constant_buffer_buffer_desc: d3d12.CONSTANT_BUFFER_VIEW_DESC,
+    constant_buffer_desc: d3d12.CONSTANT_BUFFER_VIEW_DESC,
 
     backbuffer_states: [NUM_RENDERTARGETS]BackbufferState,
 
@@ -420,119 +420,116 @@ submit_command_list :: proc(s: ^State, commandlist: ^rc.CommandList) {
                     check(hr, s.info_queue, "Failed to reset command list")
 
                     cmdlist = bs.cmdlist
+                    cmdlist->SetDescriptorHeaps(1, &s.cbv_heap);
                 }
             }
             case rc.SetTexture: {
                 if shader, ok := &s.resources[c.shader].resource.(Shader); ok {
-                    if p, ok := &s.resources[c.pipeline].resource.(Pipeline); ok {
-                        if t, ok := &s.resources[c.texture].resource.(Texture); ok {
-                           for st, arr_idx in &shader.textures {
-                                if st.name == c.name {
-                                    res_handle := get_cbv_handle(s, (1 + arr_idx))
+                    if t, ok := &s.resources[c.texture].resource.(Texture); ok {
+                       for st, arr_idx in &shader.textures {
+                            if st.name == c.name {
+                                res_handle := get_cbv_handle(s, (1 + arr_idx))
 
-                                    texture_srv_desc := d3d12.SHADER_RESOURCE_VIEW_DESC {
-                                        Format = t.desc.Format,
-                                        ViewDimension = .TEXTURE2D,
-                                        Shader4ComponentMapping = 5768,
-                                    }
-
-                                    texture_srv_desc.Texture2D.MipLevels = 1
-
-                                    s.device->CreateShaderResourceView(t.res, &texture_srv_desc, res_handle)
-                                    break;
+                                texture_srv_desc := d3d12.SHADER_RESOURCE_VIEW_DESC {
+                                    Format = t.desc.Format,
+                                    ViewDimension = .TEXTURE2D,
+                                    Shader4ComponentMapping = 5768,
                                 }
+
+                                texture_srv_desc.Texture2D.MipLevels = 1
+
+                                s.device->CreateShaderResourceView(t.res, &texture_srv_desc, res_handle)
+                                break;
                             }
                         }
                     }
                 }
             }
             case rc.CreateTexture: {
-                if p, ok := &s.resources[c.pipeline].resource.(Pipeline); ok {
-                    t: Texture
+                t: Texture
 
-                    texture_desc := d3d12.RESOURCE_DESC {
-                        Dimension = .TEXTURE2D,
-                        Width = u64(c.width),
-                        Height = u32(c.height),
-                        Format = d3d_format(c.format),
-                        DepthOrArraySize = 1,
-                        MipLevels = 1,
-                        SampleDesc = { Count = 1, Quality = 0, },
-                    }
-
-                    t.desc = texture_desc
-
-                    heap_props2 := d3d12.HEAP_PROPERTIES {
-                        Type = .DEFAULT, 
-                    }
-
-                    hr = s.device->CreateCommittedResource(&heap_props2, .NONE, &texture_desc, .COPY_DEST, nil, d3d12.IResource_UUID, (^rawptr)(&t.res))
-                    check(hr, s.info_queue, "Failed creating commited resource")
-
-                    tex_size: u64
-                    s.device->GetCopyableFootprints(&texture_desc, 0, 1, 0, nil, nil, nil, &tex_size);
-
-                    upload_desc := d3d12.RESOURCE_DESC {
-                        Dimension = .BUFFER,
-                        Width = u64(tex_size),
-                        Height = 1,
-                        DepthOrArraySize = 1,
-                        MipLevels = 1,
-                        SampleDesc = { Count = 1, Quality = 0, },
-                        Layout = .ROW_MAJOR,
-                    }
-
-                    texture_upload: ^d3d12.IResource
-
-                    hr = s.device->CreateCommittedResource(
-                        &d3d12.HEAP_PROPERTIES { Type = .UPLOAD },
-                        .NONE, // no flags
-                        &upload_desc, // resource description for a buffer (storing the image data in this heap just to copy to the default heap)
-                        .GENERIC_READ, // We will copy the contents from this heap to the default heap above
-                        nil,
-                        d3d12.IResource_UUID, (^rawptr)(&texture_upload))
-
-                    delay_destruction(s, texture_upload, 2)
-
-                    check(hr, s.info_queue, "Failed creating commited resource")
-
-                    texture_upload_map: rawptr
-                    texture_upload->Map(0, &d3d12.RANGE{}, &texture_upload_map)
-                    mem.copy(texture_upload_map, c.data, rt.texture_size(c.format, c.width, c.height))
-                    texture_upload->Unmap(0, nil)
-
-                    copy_location := d3d12.TEXTURE_COPY_LOCATION { pResource = texture_upload, Type = .PLACED_FOOTPRINT }
-
-                    s.device->GetCopyableFootprints(&texture_desc, 0, 1, 0, &copy_location.PlacedFootprint, nil, nil, nil);
-
-                    if !ensure_cmdlist(cmdlist) {
-                        break
-                    }
-
-                    cmdlist->CopyTextureRegion(
-                            &d3d12.TEXTURE_COPY_LOCATION { pResource = t.res },
-                            0, 0, 0, 
-                            &copy_location,
-                            nil)
-
-                    b := d3d12.RESOURCE_BARRIER {
-                        Type = .TRANSITION,
-                        Flags = .NONE,
-                    }
-
-                    b.Transition = {
-                        pResource = t.res,
-                        StateBefore = .COPY_DEST,
-                        StateAfter = .PIXEL_SHADER_RESOURCE,
-                        Subresource = d3d12.RESOURCE_BARRIER_ALL_SUBRESOURCES,
-                    }
-
-                    cmdlist->ResourceBarrier(1, &b);
-
-                    set_resource(s, c.handle, t)
-
-                    free(c.data)
+                texture_desc := d3d12.RESOURCE_DESC {
+                    Dimension = .TEXTURE2D,
+                    Width = u64(c.width),
+                    Height = u32(c.height),
+                    Format = d3d_format(c.format),
+                    DepthOrArraySize = 1,
+                    MipLevels = 1,
+                    SampleDesc = { Count = 1, Quality = 0, },
                 }
+
+                t.desc = texture_desc
+
+                heap_props2 := d3d12.HEAP_PROPERTIES {
+                    Type = .DEFAULT, 
+                }
+
+                hr = s.device->CreateCommittedResource(&heap_props2, .NONE, &texture_desc, .COPY_DEST, nil, d3d12.IResource_UUID, (^rawptr)(&t.res))
+                check(hr, s.info_queue, "Failed creating commited resource")
+
+                tex_size: u64
+                s.device->GetCopyableFootprints(&texture_desc, 0, 1, 0, nil, nil, nil, &tex_size);
+
+                upload_desc := d3d12.RESOURCE_DESC {
+                    Dimension = .BUFFER,
+                    Width = u64(tex_size),
+                    Height = 1,
+                    DepthOrArraySize = 1,
+                    MipLevels = 1,
+                    SampleDesc = { Count = 1, Quality = 0, },
+                    Layout = .ROW_MAJOR,
+                }
+
+                texture_upload: ^d3d12.IResource
+
+                hr = s.device->CreateCommittedResource(
+                    &d3d12.HEAP_PROPERTIES { Type = .UPLOAD },
+                    .NONE, // no flags
+                    &upload_desc, // resource description for a buffer (storing the image data in this heap just to copy to the default heap)
+                    .GENERIC_READ, // We will copy the contents from this heap to the default heap above
+                    nil,
+                    d3d12.IResource_UUID, (^rawptr)(&texture_upload))
+
+                delay_destruction(s, texture_upload, 2)
+
+                check(hr, s.info_queue, "Failed creating commited resource")
+
+                texture_upload_map: rawptr
+                texture_upload->Map(0, &d3d12.RANGE{}, &texture_upload_map)
+                mem.copy(texture_upload_map, c.data, rt.texture_size(c.format, c.width, c.height))
+                texture_upload->Unmap(0, nil)
+
+                copy_location := d3d12.TEXTURE_COPY_LOCATION { pResource = texture_upload, Type = .PLACED_FOOTPRINT }
+
+                s.device->GetCopyableFootprints(&texture_desc, 0, 1, 0, &copy_location.PlacedFootprint, nil, nil, nil);
+
+                if !ensure_cmdlist(cmdlist) {
+                    break
+                }
+
+                cmdlist->CopyTextureRegion(
+                        &d3d12.TEXTURE_COPY_LOCATION { pResource = t.res },
+                        0, 0, 0, 
+                        &copy_location,
+                        nil)
+
+                b := d3d12.RESOURCE_BARRIER {
+                    Type = .TRANSITION,
+                    Flags = .NONE,
+                }
+
+                b.Transition = {
+                    pResource = t.res,
+                    StateBefore = .COPY_DEST,
+                    StateAfter = .PIXEL_SHADER_RESOURCE,
+                    Subresource = d3d12.RESOURCE_BARRIER_ALL_SUBRESOURCES,
+                }
+
+                cmdlist->ResourceBarrier(1, &b);
+
+                set_resource(s, c.handle, t)
+
+                free(c.data)
             }
             case rc.SetShader: {
                 if shader, ok := &s.resources[c.handle].resource.(Shader); ok {
@@ -542,7 +539,7 @@ submit_command_list :: proc(s: ^State, commandlist: ^rc.CommandList) {
                         }
 
                         res_handle := get_cbv_handle(s, 0)
-                        s.device->CreateConstantBufferView(&p.constant_buffer_buffer_desc, res_handle)
+                        s.device->CreateConstantBufferView(&p.constant_buffer_desc, res_handle)
 
                         cmdlist->SetGraphicsRootSignature(shader.root_signature)
                         table_handle: d3d12.GPU_DESCRIPTOR_HANDLE
@@ -664,7 +661,7 @@ submit_command_list :: proc(s: ^State, commandlist: ^rc.CommandList) {
                     r: d3d12.RANGE = {}
                     p.constant_buffer_bindless->Map(0, &r, (^rawptr)(&p.constant_buffer_bindless_map))
 
-                    p.constant_buffer_buffer_desc = d3d12.CONSTANT_BUFFER_VIEW_DESC {
+                    p.constant_buffer_desc = d3d12.CONSTANT_BUFFER_VIEW_DESC {
                         SizeInBytes = 1024,
                         BufferLocation = p.constant_buffer_bindless->GetGPUVirtualAddress(),
                     }
@@ -1027,16 +1024,6 @@ submit_command_list :: proc(s: ^State, commandlist: ^rc.CommandList) {
                 free(c.data)
             }
 
-            case rc.SetPipeline: {
-                if p, ok := &s.resources[c.handle].resource.(Pipeline); ok {
-                    if !ensure_cmdlist(cmdlist) {
-                        break
-                    }
-
-                    cmdlist->SetDescriptorHeaps(1, &s.cbv_heap);
-                }
-            }
-
             case rc.SetScissor: {
                 if !ensure_cmdlist(cmdlist) {
                     break
@@ -1099,26 +1086,26 @@ submit_command_list :: proc(s: ^State, commandlist: ^rc.CommandList) {
                 }
 
             case rc.DrawCall: {
-                    if !ensure_cmdlist(cmdlist) {
-                        break
-                    }
-
-                    vb_view: d3d12.VERTEX_BUFFER_VIEW
-                    ib_view: d3d12.INDEX_BUFFER_VIEW
-                    if b, ok := &s.resources[c.vertex_buffer].resource.(Buffer); ok {
-                        vb_view, _ = b.view.(d3d12.VERTEX_BUFFER_VIEW)
-                    }
-
-                    if b, ok := &s.resources[c.index_buffer].resource.(Buffer); ok {
-                        ib_view, _ = b.view.(d3d12.INDEX_BUFFER_VIEW)
-                    }
-
-                    num_indices := ib_view.SizeInBytes / 4
-                    cmdlist->IASetPrimitiveTopology(.TRIANGLELIST)
-                    cmdlist->IASetVertexBuffers(0, 1, &vb_view)
-                    cmdlist->IASetIndexBuffer(&ib_view)
-                    cmdlist->DrawIndexedInstanced(num_indices, 1, 0, 0, 0)
+                if !ensure_cmdlist(cmdlist) {
+                    break
                 }
+
+                vb_view: d3d12.VERTEX_BUFFER_VIEW
+                ib_view: d3d12.INDEX_BUFFER_VIEW
+                if b, ok := &s.resources[c.vertex_buffer].resource.(Buffer); ok {
+                    vb_view, _ = b.view.(d3d12.VERTEX_BUFFER_VIEW)
+                }
+
+                if b, ok := &s.resources[c.index_buffer].resource.(Buffer); ok {
+                    ib_view, _ = b.view.(d3d12.INDEX_BUFFER_VIEW)
+                }
+
+                num_indices := ib_view.SizeInBytes / 4
+                cmdlist->IASetPrimitiveTopology(.TRIANGLELIST)
+                cmdlist->IASetVertexBuffers(0, 1, &vb_view)
+                cmdlist->IASetIndexBuffer(&ib_view)
+                cmdlist->DrawIndexedInstanced(num_indices, 1, 0, 0, 0)
+            }
 
             case rc.ResourceTransition:
                 if p, ok := &s.resources[c.render_target.pipeline].resource.(Pipeline); ok {

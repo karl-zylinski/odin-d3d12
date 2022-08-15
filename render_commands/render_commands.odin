@@ -106,7 +106,7 @@ destroy_constant :: proc(cmdlist: ^CommandList, pipeline: Handle, constant: Hand
     append(&cmdlist.commands, DestroyConstant { constant = constant, pipeline = pipeline })
 }
 
-create_texture :: proc(cmdlist: ^CommandList, pipeline: Handle, format: render_types.TextureFormat, width: int, height: int, data: rawptr) -> Handle {
+create_texture :: proc(cmdlist: ^CommandList, format: render_types.TextureFormat, width: int, height: int, data: rawptr) -> Handle {
     h := get_handle(cmdlist.state)
 
     tx_size := render_types.texture_size(format, width, height)
@@ -117,7 +117,6 @@ create_texture :: proc(cmdlist: ^CommandList, pipeline: Handle, format: render_t
         width = width,
         height = height,
         format = format,
-        pipeline = pipeline,
     }
 
     mem.copy(c.data, data, tx_size)
@@ -125,9 +124,8 @@ create_texture :: proc(cmdlist: ^CommandList, pipeline: Handle, format: render_t
     return h
 }
 
-set_texture :: proc(cmdlist: ^CommandList, pipeline: Handle, shader: Handle, name: base.StrHash, texture: Handle) {
+set_texture :: proc(cmdlist: ^CommandList, shader: Handle, name: base.StrHash, texture: Handle) {
     append(&cmdlist.commands, SetTexture {
-        pipeline = pipeline,
         shader = shader,
         name = name,
         texture = texture,
@@ -157,12 +155,6 @@ create_command_list :: proc(s: ^State) -> CommandList {
 
 destroy_command_list :: proc(cmdlist: ^CommandList) {
     delete(cmdlist.commands)
-}
-
-set_pipeline :: proc(cmdlist: ^CommandList, pipeline: Handle) {
-    append(&cmdlist.commands, SetPipeline {
-        handle = pipeline,
-    })
 }
 
 set_shader :: proc(cmdlist: ^CommandList, pipeline: Handle, shader: Handle) {
@@ -283,10 +275,6 @@ SetScissor :: struct {
     rect: math.Rect,
 }
 
-SetPipeline :: struct {
-    handle: Handle,
-}
-
 CreatePipeline :: struct {
     handle: Handle,
     swapchain_x, swapchain_y: f32,
@@ -333,11 +321,9 @@ CreateTexture :: struct {
     format: render_types.TextureFormat,
     width: int,
     height: int,
-    pipeline: Handle,
 }
 
 SetTexture :: struct {
-    pipeline: Handle,
     shader: Handle,
     name: base.StrHash,
     texture: Handle,
@@ -358,7 +344,6 @@ Command :: union {
     SetRenderTarget,
     SetViewport,
     SetScissor,
-    SetPipeline,
     CreatePipeline,
     CreateShader,
     SetShader,

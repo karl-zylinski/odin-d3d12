@@ -410,7 +410,7 @@ run :: proc() {
                 img := make([]byte, fs, context.temp_allocator)
                 os.read(f, img)
 
-                texture = rc.create_texture(&cmdlist, pipeline, .R8G8B8A8_UNORM, 2048, 1024, rawptr(&img[0]))
+                texture = rc.create_texture(&cmdlist, .R8G8B8A8_UNORM, 2048, 1024, rawptr(&img[0]))
             }
 
             {
@@ -420,7 +420,7 @@ run :: proc() {
                 img := make([]byte, fs, context.temp_allocator)
                 os.read(f, img)
 
-                texture2 = rc.create_texture(&cmdlist, pipeline, .R8G8B8A8_UNORM, 2048, 1024, rawptr(&img[0]))
+                texture2 = rc.create_texture(&cmdlist, .R8G8B8A8_UNORM, 2048, 1024, rawptr(&img[0]))
             }
 
 
@@ -428,9 +428,8 @@ run :: proc() {
         }
 
 
-        rc.set_texture(&cmdlist, pipeline, shader, base.hash("albedo"), math.fract(t) > 0.5 ? texture : texture2)
-        rc.set_texture(&cmdlist, pipeline, shader, base.hash("albedo2"), texture2)
-        rc.set_pipeline(&cmdlist, pipeline)
+        rc.set_texture(&cmdlist, shader, base.hash("albedo"), math.fract(t) > 0.5 ? texture : texture2)
+        rc.set_texture(&cmdlist, shader, base.hash("albedo2"), texture2)
         rc.set_shader(&cmdlist, pipeline, shader)
         rc.upload_constant(&cmdlist, pipeline, sun_pos_const, &sun_pos)
         rc.set_constant(&cmdlist, pipeline, shader, base.hash("sun_pos"), sun_pos_const)
