@@ -134,9 +134,8 @@ set_texture :: proc(cmdlist: ^CommandList, pipeline: Handle, shader: Handle, nam
     }) 
 }
 
-draw_call :: proc(cmdlist: ^CommandList, pipeline: Handle, vertex_buffer: Handle, index_buffer: Handle) {
+draw_call :: proc(cmdlist: ^CommandList, vertex_buffer: Handle, index_buffer: Handle) {
     append(&cmdlist.commands, DrawCall {
-        pipeline = pipeline,
         vertex_buffer = vertex_buffer,
         index_buffer = index_buffer,
     })
@@ -173,17 +172,15 @@ set_shader :: proc(cmdlist: ^CommandList, pipeline: Handle, shader: Handle) {
     })
 }
 
-set_scissor :: proc(cmdlist: ^CommandList, pipeline: Handle, rect: math.Rect) {
+set_scissor :: proc(cmdlist: ^CommandList, rect: math.Rect) {
     append(&cmdlist.commands, SetScissor {
         rect = rect,
-        pipeline = pipeline,
     })
 }
 
-set_viewport :: proc(cmdlist: ^CommandList, pipeline: Handle, rect: math.Rect) {
+set_viewport :: proc(cmdlist: ^CommandList, rect: math.Rect) {
     append(&cmdlist.commands, SetViewport {
         rect = rect,
-        pipeline = pipeline,
     })
 }
 
@@ -250,7 +247,6 @@ CreateBuffer :: struct {
 }
 
 DrawCall :: struct {
-    pipeline: Handle,
     vertex_buffer: Handle,
     index_buffer: Handle,
 }
@@ -280,13 +276,11 @@ SetRenderTarget :: struct {
 }
 
 SetViewport :: struct {
-    pipeline: Handle,
     rect: math.Rect,
 }
 
 SetScissor :: struct {
     rect: math.Rect,
-    pipeline: Handle,
 }
 
 SetPipeline :: struct {

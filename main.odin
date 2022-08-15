@@ -264,7 +264,7 @@ render_renderable :: proc(rc_state: ^rc.State, pipeline: render_types.Handle, cm
 
     rc.upload_constant(cmdlist, pipeline, ren.mvp_buffer, &mvp)
     rc.set_constant(cmdlist, pipeline, ren.shader, base.hash("mvp"), ren.mvp_buffer)
-    rc.draw_call(cmdlist, pipeline, ren.vertex_buffer, ren.index_buffer)
+    rc.draw_call(cmdlist, ren.vertex_buffer, ren.index_buffer)
 }
 
 near :: f32(0.01)
@@ -395,7 +395,7 @@ run :: proc() {
         sun_pos := math.float3 {
             math.cos(t)*50, 0, math.sin(t)*50,
         }
-        render_d3d12.update(&renderer_state, pipeline)
+        render_d3d12.update(&renderer_state)
 
         cmdlist := rc.create_command_list(&rc_state)
 
@@ -437,8 +437,8 @@ run :: proc() {
         rc.upload_constant(&cmdlist, pipeline, color_const, &color)
         rc.set_constant(&cmdlist, pipeline, shader, base.hash("color"), color_const)
 
-        rc.set_scissor(&cmdlist, pipeline, { w = f32(wx), h = f32(wy), })
-        rc.set_viewport(&cmdlist, pipeline, { w = f32(wx), h = f32(wy), })
+        rc.set_scissor(&cmdlist, { w = f32(wx), h = f32(wy), })
+        rc.set_viewport(&cmdlist, { w = f32(wx), h = f32(wy), })
 
         rc.resource_transition(&cmdlist, .Present, .RenderTarget)
         rc.clear_render_target(&cmdlist, pipeline, {0, 0, 0, 1})
