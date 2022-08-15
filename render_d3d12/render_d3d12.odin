@@ -50,15 +50,15 @@ BackbufferState :: struct {
     cmdallocator: ^d3d12.ICommandAllocator,
     cmdlist: ^d3d12.IGraphicsCommandList,
     fence_val: u64,
+    render_target: ^d3d12.IResource,
 }
 
 Pipeline :: struct {
     swapchain: ^dxgi.ISwapChain3,
     queue: ^d3d12.ICommandQueue,
     depth: ^d3d12.IResource,
-    targets: [NUM_RENDERTARGETS]^d3d12.IResource,
     backbuffer_fence: ^d3d12.IFence,
-    current_frame: u64,
+    num_backbuffer_presents: u64,
     dsv_descriptor_heap: ^d3d12.IDescriptorHeap,
     rtv_descriptor_heap: ^d3d12.IDescriptorHeap,
     cbv_descriptor_heap: ^d3d12.IDescriptorHeap,
@@ -243,8 +243,6 @@ destroy_resource :: proc(s: ^State, handle: rt.Handle) {
             r.swapchain->Release()
             r.queue->Release()
             r.depth->Release()
-            r.targets[0]->Release()
-            r.targets[1]->Release()
             r.dsv_descriptor_heap->Release()
             r.rtv_descriptor_heap->Release()
             r.cbv_descriptor_heap->Release()
@@ -255,6 +253,7 @@ destroy_resource :: proc(s: ^State, handle: rt.Handle) {
             for bs in r.backbuffer_states {
                 bs.cmdallocator->Reset()
                 bs.cmdlist->Release()    
+                bs.render_target->Release()
             }
 
             res^ = Resource{}
@@ -539,7 +538,7 @@ submit_command_list :: proc(s: ^State, commandlist: ^rc.CommandList) {
                 // Descripors describe the GPU data and are allocated from a Descriptor Heap
                 {
                     desc := d3d12.DESCRIPTOR_HEAP_DESC {
-                        NumDescriptors = NUM_RENDERTARGETS,
+                        NumDescriptors = 100,
                         Type = .RTV,
                         Flags = .NONE,
                     };
@@ -551,16 +550,9 @@ submit_command_list :: proc(s: ^State, commandlist: ^rc.CommandList) {
 
                 // Fetch the two render targets from the swapchain
                 {
-                    rtv_descriptor_size: u32 = s.device->GetDescriptorHandleIncrementSize(.RTV)
-
-                    rtv_descriptor_handle: d3d12.CPU_DESCRIPTOR_HANDLE
-                    p.rtv_descriptor_heap->GetCPUDescriptorHandleForHeapStart(&rtv_descriptor_handle)
-
                     for i :u32= 0; i < NUM_RENDERTARGETS; i += 1 {
-                        hr = p.swapchain->GetBuffer(i, d3d12.IResource_UUID, (^rawptr)(&p.targets[i]))
+                        hr = p.swapchain->GetBuffer(i, d3d12.IResource_UUID, (^rawptr)(&p.backbuffer_states[i].render_target))
                         check(hr, s.info_queue, "Failed getting render target")
-                        s.device->CreateRenderTargetView(p.targets[i], nil, rtv_descriptor_handle);
-                        rtv_descriptor_handle.ptr += uint(rtv_descriptor_size);
                     }
                 }
 
@@ -1027,11 +1019,9 @@ submit_command_list :: proc(s: ^State, commandlist: ^rc.CommandList) {
                     rtv_handle: d3d12.CPU_DESCRIPTOR_HANDLE
                     p.rtv_descriptor_heap->GetCPUDescriptorHandleForHeapStart(&rtv_handle)
                     frame_index := p->swapchain->GetCurrentBackBufferIndex()
-
-                    if (frame_index > 0) {
-                        size := s.device->GetDescriptorHandleIncrementSize(.RTV)
-                        rtv_handle.ptr += uint(frame_index * size)
-                    }
+                    rt := p.backbuffer_states[frame_index].render_target
+                    rtv_handle.ptr += uint(frame_index * s.device->GetDescriptorHandleIncrementSize(.RTV))
+                    s.device->CreateRenderTargetView(rt, nil, rtv_handle);
 
                     dsv_handle: d3d12.CPU_DESCRIPTOR_HANDLE
                     p.dsv_descriptor_heap->GetCPUDescriptorHandleForHeapStart(&dsv_handle);
@@ -1047,11 +1037,9 @@ submit_command_list :: proc(s: ^State, commandlist: ^rc.CommandList) {
                     rtv_handle: d3d12.CPU_DESCRIPTOR_HANDLE
                     p.rtv_descriptor_heap->GetCPUDescriptorHandleForHeapStart(&rtv_handle)
                     frame_index := p->swapchain->GetCurrentBackBufferIndex()
-
-                    if (frame_index > 0) {
-                        size := s.device->GetDescriptorHandleIncrementSize(.RTV)
-                        rtv_handle.ptr += uint(frame_index * size)
-                    }
+                    rt := p.backbuffer_states[frame_index].render_target
+                    rtv_handle.ptr += uint(frame_index * s.device->GetDescriptorHandleIncrementSize(.RTV))
+                    s.device->CreateRenderTargetView(rt, nil, rtv_handle);
 
                     cc := c.clear_color
                     cmdlist->ClearRenderTargetView(rtv_handle, (^[4]f32)(&cc), 0, nil)
@@ -1096,7 +1084,7 @@ submit_command_list :: proc(s: ^State, commandlist: ^rc.CommandList) {
                     frame_index := p->swapchain->GetCurrentBackBufferIndex()
 
                     b.Transition = {
-                        pResource = p.targets[frame_index],
+                        pResource = p.backbuffer_states[frame_index].render_target,
                         StateBefore = ri_to_d3d_state(c.before),
                         StateAfter = ri_to_d3d_state(c.after),
                         Subresource = d3d12.RESOURCE_BARRIER_ALL_SUBRESOURCES,
@@ -1124,9 +1112,9 @@ submit_command_list :: proc(s: ^State, commandlist: ^rc.CommandList) {
                     frame_index := p->swapchain->GetCurrentBackBufferIndex()
                     hr = p->swapchain->Present1(1, flags, &params)
                     check(hr, s.info_queue, "Present failed")
-                    p.current_frame += 1
-                    p.queue->Signal(p.backbuffer_fence, p.current_frame)
-                    p.backbuffer_states[frame_index].fence_val = p.current_frame 
+                    p.num_backbuffer_presents += 1
+                    p.queue->Signal(p.backbuffer_fence, p.num_backbuffer_presents)
+                    p.backbuffer_states[frame_index].fence_val = p.num_backbuffer_presents 
                 }
         }
     }
