@@ -4,7 +4,8 @@ TODO:
     X CreateTexture exists now, but when does the upload heap die? It can't be released before copying is done.
     X Make them uploadable and settable from using commands
     * Can we merge their mgmt with constant buffers, some resource concept?
-* We are passing pipeline objects everywhere. Many are just used to get to the cmdlist. Can we do something like where we have a 'current pass' that is being prepared and have the cmdlist in there?
+X We are passing pipeline objects everywhere. Many are just used to get to the cmdlist. Can we do something like where we have a 'current pass' that is being prepared and have the cmdlist in there?
+* Somehow pre-package the constant buffer data in staging memory and upload to GPU each frame.
 * Fix build system include path so I dont have to write ".." in front of things. I.e. make my project like vendor: or core:
 * ResourceTransition command seems broken. There is no resource to set?
 * Vertex & index buffers bindless
