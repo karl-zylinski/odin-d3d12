@@ -61,11 +61,7 @@ None :: struct {
 }
 
 ShaderConstantBuffer :: struct {
-    // This is the index in the GPU-side constant_buffers array
-    index: u32,
     name: base.StrHash,
-    type: ss.ConstantBufferType,
-    size: int,
 }
 
 ShaderTexture :: struct {
@@ -366,6 +362,7 @@ constant_buffer_type_size :: proc(t: ss.ConstantBufferType) -> int {
         case .Float4x4: return 64
         case .Float4: return 16
         case .Float3: return 12
+        case .Float: return 4
     }
 
     return 0
@@ -701,7 +698,7 @@ submit_command_list :: proc(s: ^State, commandlist: ^rc.CommandList) {
                 check(hr, s.info_queue, "Failed to compile pixel shader")
 
                 for cb, cb_idx in def.constant_buffers {
-                    append(&rd.constant_buffers, ShaderConstantBuffer{ type = cb.type, name = base.hash(cb.name), index = CONSTANT_BUFFER_UNINITIALIZED })
+                    append(&rd.constant_buffers, ShaderConstantBuffer{ name = base.hash(cb.name) })
                 }
 
                 for t in def.textures_2d {
@@ -720,7 +717,7 @@ submit_command_list :: proc(s: ^State, commandlist: ^rc.CommandList) {
                     // create a descriptor range (descriptor table) and fill it out
                     // this is a range of descriptors inside a descriptor heap
                     descriptor_table_ranges: []d3d12.DESCRIPTOR_RANGE = {
-
+                        // Constant buffer blob
                         {
                             RangeType = .SRV,
                             NumDescriptors = 1,
@@ -729,6 +726,7 @@ submit_command_list :: proc(s: ^State, commandlist: ^rc.CommandList) {
                             OffsetInDescriptorsFromTableStart = d3d12.DESCRIPTOR_RANGE_OFFSET_APPEND,
                         },
 
+                        // 32 textures
                         {
                             RangeType = .SRV,
                             NumDescriptors = 32,
@@ -756,10 +754,6 @@ submit_command_list :: proc(s: ^State, commandlist: ^rc.CommandList) {
                             ParameterType = ._32BIT_CONSTANTS,
                             ShaderVisibility = .ALL,
                         },
-                        {
-                            ParameterType = ._32BIT_CONSTANTS,
-                            ShaderVisibility = .ALL,
-                        },
                     }
 
                     root_parameters[0].DescriptorTable = descriptor_table
@@ -767,11 +761,6 @@ submit_command_list :: proc(s: ^State, commandlist: ^rc.CommandList) {
                         ShaderRegister = 0,
                         RegisterSpace = 0, 
                         Num32BitValues = 32,
-                    }
-                    root_parameters[2].Constants = {
-                        ShaderRegister = 0,
-                        RegisterSpace = 1, 
-                        Num32BitValues = 16,
                     }
 
                     // create a static sampler

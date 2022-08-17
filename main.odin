@@ -400,7 +400,6 @@ run :: proc() {
 
         cmdlist := rc.create_command_list(&rc_state)
 
-
         rc.begin_pass(&cmdlist, pipeline)
 
         if first_frame == true {
