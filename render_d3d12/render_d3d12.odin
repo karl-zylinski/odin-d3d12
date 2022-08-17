@@ -495,9 +495,9 @@ submit_command_list :: proc(s: ^State, commandlist: ^rc.CommandList) {
 
                 hr = s.device->CreateCommittedResource(
                     &d3d12.HEAP_PROPERTIES { Type = .UPLOAD },
-                    .NONE, // no flags
-                    &upload_desc, // resource description for a buffer (storing the image data in this heap just to copy to the default heap)
-                    .GENERIC_READ, // We will copy the contents from this heap to the default heap above
+                    .NONE,
+                    &upload_desc,
+                    .GENERIC_READ,
                     nil,
                     d3d12.IResource_UUID, (^rawptr)(&texture_upload))
 

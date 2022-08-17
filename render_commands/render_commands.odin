@@ -362,7 +362,7 @@ Command :: union {
     SetConstantBuffer,
 }
 
-// Move this to some other file
+// Move this to some other file?
 
 NamedOffset :: struct {
     name: base.StrHash,
@@ -376,6 +376,6 @@ BufferWithNamedOffsets :: struct {
 
 buffer_append :: proc(b: ^BufferWithNamedOffsets, val: ^$T, name: base.StrHash) {
     offset := len(b.data)
-    append(&b.data, ..slice.bytes_from_ptr(val, size_of(val^)))
+    append(&b.data, ..mem.ptr_to_bytes(val))
     append(&b.offsets, NamedOffset { name = name, offset = offset })
 }
