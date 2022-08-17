@@ -180,8 +180,9 @@ set_viewport :: proc(cmdlist: ^CommandList, rect: math.Rect) {
     })
 }
 
-resource_transition :: proc(cmdlist: ^CommandList, before: ResourceState, after: ResourceState) {
+resource_transition :: proc(cmdlist: ^CommandList, resource: Handle, before: ResourceState, after: ResourceState) {
     append(&cmdlist.commands, ResourceTransition {
+        resource = resource,
         before = before,
         after = after,
     })
@@ -227,6 +228,12 @@ CreateBuffer :: struct {
     stride: int,
 }
 
+UpdateBuffer :: struct {
+    handle: Handle,
+    data: rawptr,
+    size: int,
+}
+
 DrawCall :: struct {
     vertex_buffer: Handle,
     index_buffer: Handle,
@@ -235,6 +242,9 @@ DrawCall :: struct {
 ResourceState :: enum {
     Present,
     RenderTarget,
+    CopyDest,
+    VertexBuffer,
+    IndexBuffer,
 }
 
 RenderTarget :: struct {
@@ -242,7 +252,7 @@ RenderTarget :: struct {
 }
 
 ResourceTransition :: struct {
-    render_target: RenderTarget,
+    resource: Handle,
     before: ResourceState,
     after: ResourceState,
 }
@@ -346,4 +356,5 @@ Command :: union {
     SetTexture,
     BeginPass,
     BeginResourceCreation,
+    UpdateBuffer,
 }

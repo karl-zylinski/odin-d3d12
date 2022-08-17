@@ -243,7 +243,9 @@ create_renderable :: proc(renderer_state: ^render_d3d12.State, rc_state: ^rc.Sta
     cmdlist := rc.create_command_list(rc_state)
     rc.begin_resource_creation(&cmdlist)
     ren.vertex_buffer = rc.create_buffer(&cmdlist, rawptr(&vertex_data[0]), vertex_buffer_size, 32)
+    rc.resource_transition(&cmdlist, ren.vertex_buffer, .CopyDest, .VertexBuffer)
     ren.index_buffer = rc.create_buffer(&cmdlist, rawptr(&indices[0]), index_buffer_size, 4)
+    rc.resource_transition(&cmdlist, ren.index_buffer, .CopyDest, .IndexBuffer)
     rc.execute(&cmdlist)
     render_d3d12.submit_command_list(renderer_state, &cmdlist)
 
@@ -441,7 +443,7 @@ run :: proc() {
         rc.set_scissor(&cmdlist, { w = f32(wx), h = f32(wy), })
         rc.set_viewport(&cmdlist, { w = f32(wx), h = f32(wy), })
 
-        rc.resource_transition(&cmdlist, .Present, .RenderTarget)
+        rc.resource_transition(&cmdlist, pipeline, .Present, .RenderTarget)
         rc.clear_render_target(&cmdlist, pipeline, {0, 0, 0, 1})
         rc.set_render_target(&cmdlist, pipeline)
 
@@ -449,7 +451,7 @@ run :: proc() {
             render_renderable(&rc_state, pipeline, &cmdlist, view, &ren)
         }
 
-        rc.resource_transition(&cmdlist, .RenderTarget, .Present)
+        rc.resource_transition(&cmdlist, pipeline, .RenderTarget, .Present)
         rc.execute(&cmdlist)
         rc.present(&cmdlist, pipeline)
         render_d3d12.submit_command_list(&renderer_state, &cmdlist)

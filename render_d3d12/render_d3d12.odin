@@ -25,6 +25,7 @@ Buffer :: struct {
     buffer: ^d3d12.IResource,
     size: int,
     stride: int,
+    state: d3d12.RESOURCE_STATES,
 }
 
 Fence :: struct {
@@ -984,6 +985,7 @@ submit_command_list :: proc(s: ^State, commandlist: ^rc.CommandList) {
                 ss.free_shader(&def)
                 set_resource(s, c.handle, rd)
             }
+            
             case rc.CreateBuffer: {
                 upload_res: ^d3d12.IResource
 
@@ -1031,32 +1033,60 @@ submit_command_list :: proc(s: ^State, commandlist: ^rc.CommandList) {
                 rd := Buffer {
                     size = c.size,
                     stride = c.stride,
+                    state = .COPY_DEST,
                 }
 
                 hr = s.device->CreateCommittedResource(&d3d12.HEAP_PROPERTIES{ Type = .DEFAULT }, .NONE, &resource_desc, .COPY_DEST, nil, d3d12.IResource_UUID, (^rawptr)(&rd.buffer))
                 check(hr, s.info_queue, "Failed buffer")
 
                 cmdlist->CopyBufferRegion(rd.buffer, 0, upload_res, 0, u64(c.size))
-
-                is_vertex := c.stride == 32
-
                 set_resource(s, c.handle, rd)
-
-                b := d3d12.RESOURCE_BARRIER {
-                    Type = .TRANSITION,
-                    Flags = .NONE,
-                }
-
-                b.Transition = {
-                    pResource = rd.buffer,
-                    StateBefore = .COPY_DEST,
-                    StateAfter = is_vertex ? .VERTEX_AND_CONSTANT_BUFFER : .INDEX_BUFFER,
-                    Subresource = d3d12.RESOURCE_BARRIER_ALL_SUBRESOURCES,
-                }
-
-                cmdlist->ResourceBarrier(1, &b);
-
                 free(c.data)
+            }
+
+            case rc.UpdateBuffer: {
+                if b, ok := &s.resources[c.handle].resource.(Buffer); ok {
+                    if !fmt.assertf(b.state == .COPY_DEST, "Resource not in before-state %v", d3d12.RESOURCE_STATES.COPY_DEST) {
+                        return
+                    }
+
+                    if !fmt.assertf(c.size > b.size, "New buffer won't fit inside old. Old size: %v. New size: %v", b.size, c.size) {
+                        return
+                    }
+
+                    upload_res: ^d3d12.IResource
+
+                    {
+                        upload_desc := d3d12.RESOURCE_DESC {
+                            Dimension = .BUFFER,
+                            Width = u64(c.size),
+                            Height = 1,
+                            DepthOrArraySize = 1,
+                            MipLevels = 1,
+                            SampleDesc = { Count = 1, Quality = 0, },
+                            Layout = .ROW_MAJOR,
+                        }
+
+                        hr = s.device->CreateCommittedResource(
+                            &d3d12.HEAP_PROPERTIES { Type = .UPLOAD },
+                            .NONE,
+                            &upload_desc,
+                            .GENERIC_READ,
+                            nil,
+                            d3d12.IResource_UUID, (^rawptr)(&upload_res))
+
+                        check(hr, s.info_queue, "Failed creating commited resource")
+                        delay_destruction(s, upload_res, 2)
+
+                        upload_map: rawptr
+                        upload_res->Map(0, &d3d12.RANGE{}, &upload_map)
+                        mem.copy(upload_map, c.data, c.size)
+                        upload_res->Unmap(0, nil)
+                    }
+
+                    cmdlist->CopyBufferRegion(b.buffer, 0, upload_res, 0, u64(c.size))
+                    free(c.data)
+                }
             }
 
             case rc.SetScissor: {
@@ -1150,28 +1180,49 @@ submit_command_list :: proc(s: ^State, commandlist: ^rc.CommandList) {
                 cmdlist->DrawIndexedInstanced(num_indices, 1, 0, 0, 0)
             }
 
-            case rc.ResourceTransition:
-                if p, ok := &s.resources[c.render_target.pipeline].resource.(Pipeline); ok {
-                    if !ensure_cmdlist(cmdlist) {
-                        break
-                    }
+            case rc.ResourceTransition: {
+                if !ensure_cmdlist(cmdlist) {
+                    break
+                }
 
+                res: ^d3d12.IResource
+                before := ri_to_d3d_state(c.before)
+                after := ri_to_d3d_state(c.after)
+
+                #partial switch r in &s.resources[c.resource].resource {
+                    case Pipeline: {
+                        frame_index := r->swapchain->GetCurrentBackBufferIndex()
+                        res = r.backbuffer_states[frame_index].render_target
+                    }
+                    case Buffer: {
+                        if !fmt.assertf(r.state == before, "Resource not in before-state %v", before) {
+                            return
+                        }
+                        res = r.buffer
+                        r.state = after
+                    }
+                    case: {
+                        fmt.printf("ResourceTransition not implemented for type %v", r)
+                        return
+                    }
+                }
+
+                if res != nil {
                     b := d3d12.RESOURCE_BARRIER {
                         Type = .TRANSITION,
                         Flags = .NONE,
                     }
 
-                    frame_index := p->swapchain->GetCurrentBackBufferIndex()
-
                     b.Transition = {
-                        pResource = p.backbuffer_states[frame_index].render_target,
-                        StateBefore = ri_to_d3d_state(c.before),
-                        StateAfter = ri_to_d3d_state(c.after),
+                        pResource = res,
+                        StateBefore = before,
+                        StateAfter = after,
                         Subresource = d3d12.RESOURCE_BARRIER_ALL_SUBRESOURCES,
                     }
 
                     cmdlist->ResourceBarrier(1, &b);
                 }
+            }
 
             case rc.Execute: {
                 if !ensure_cmdlist(cmdlist) {
@@ -1211,6 +1262,9 @@ ri_to_d3d_state :: proc(ri_state: rc.ResourceState) -> d3d12.RESOURCE_STATES {
     switch ri_state {
         case .Present: return .PRESENT
         case .RenderTarget: return .RENDER_TARGET
+        case .CopyDest: return .COPY_DEST
+        case .VertexBuffer: return .VERTEX_AND_CONSTANT_BUFFER
+        case .IndexBuffer: return .INDEX_BUFFER
     }
     return .COMMON
 }
