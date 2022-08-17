@@ -59,7 +59,6 @@ BackbufferState :: struct {
 
 Pipeline :: struct {
     swapchain: ^dxgi.ISwapChain3,
-    queue: ^d3d12.ICommandQueue,
     depth: ^d3d12.IResource,
     backbuffer_fence: ^d3d12.IFence,
     num_backbuffer_presents: u64,
@@ -143,6 +142,11 @@ State :: struct {
 
     dsv_heap: ^d3d12.IDescriptorHeap,
     dsv_heap_start: int,
+
+    resource_cmdallocator: ^d3d12.ICommandAllocator,
+    resource_cmdlist: ^d3d12.IGraphicsCommandList,
+
+    queue: ^d3d12.ICommandQueue,
 }
 
 get_cbv_handle :: proc(s: ^State, offset: int) -> d3d12.CPU_DESCRIPTOR_HANDLE {
@@ -271,6 +275,24 @@ create :: proc(wx: i32, wy: i32, window_handle: dxgi.HWND) -> (s: State) {
         check(hr, s.info_queue, "Failed creating cbv descriptor heap")
     }
 
+    {
+        desc := d3d12.COMMAND_QUEUE_DESC {
+            Type = .DIRECT,
+        }
+
+        hr = s.device->CreateCommandQueue(&desc, d3d12.ICommandQueue_UUID, (^rawptr)(&s.queue))
+        check(hr, s.info_queue, "Failed creating command queue")
+    }
+
+    {
+        hr = s.device->CreateCommandAllocator(.DIRECT, d3d12.ICommandAllocator_UUID, (^rawptr)(&s.resource_cmdallocator))
+        check(hr, s.info_queue, "Failed creating command allocator")
+
+        hr = s.device->CreateCommandList(0, .DIRECT, s.resource_cmdallocator, nil, d3d12.ICommandList_UUID, (^rawptr)(&s.resource_cmdlist))
+        check(hr, s.info_queue, "Failed to create command list")
+        hr = s.resource_cmdlist->Close()
+        check(hr, s.info_queue, "Failed to close command list")
+    }
 
 
     return s
@@ -299,6 +321,7 @@ destroy :: proc(s: ^State) {
     s.rtv_heap->Release()
     s.dsv_heap->Release()
     s.cbv_heap->Release()
+    s.queue->Release()
 
     delete(s.delayed_destroy)
 }
@@ -338,7 +361,7 @@ destroy_resource :: proc(s: ^State, handle: rt.Handle) {
         }
         case Pipeline: {
             r.swapchain->Release()
-            r.queue->Release()
+            
             r.depth->Release()
             
             r.constant_buffer_bindless->Release()
@@ -403,6 +426,20 @@ submit_command_list :: proc(s: ^State, commandlist: ^rc.CommandList) {
             case rc.DestroyResource: {
                 destroy_resource(s, c.handle)
             }
+            case rc.BeginResourceCreation: {
+                if cmdlist != nil {
+                    fmt.println("Trying to run BeginResourceCreation twice, or when BeginPass has already been run!")
+                    return
+                }
+
+                hr = s.resource_cmdallocator->Reset()
+                check(hr, s.info_queue, "Failed resetting command allocator")
+
+                hr = s.resource_cmdlist->Reset(s.resource_cmdallocator, nil)
+                check(hr, s.info_queue, "Failed to reset command list")
+
+                cmdlist = s.resource_cmdlist
+            }
             case rc.BeginPass: {
                 if p, ok := &s.resources[c.pipeline].resource.(Pipeline); ok {
                     frame_index := p->swapchain->GetCurrentBackBufferIndex()
@@ -460,11 +497,7 @@ submit_command_list :: proc(s: ^State, commandlist: ^rc.CommandList) {
 
                 t.desc = texture_desc
 
-                heap_props2 := d3d12.HEAP_PROPERTIES {
-                    Type = .DEFAULT, 
-                }
-
-                hr = s.device->CreateCommittedResource(&heap_props2, .NONE, &texture_desc, .COPY_DEST, nil, d3d12.IResource_UUID, (^rawptr)(&t.res))
+                hr = s.device->CreateCommittedResource(&d3d12.HEAP_PROPERTIES { Type = .DEFAULT, }, .NONE, &texture_desc, .COPY_DEST, nil, d3d12.IResource_UUID, (^rawptr)(&t.res))
                 check(hr, s.info_queue, "Failed creating commited resource")
 
                 tex_size: u64
@@ -598,15 +631,7 @@ submit_command_list :: proc(s: ^State, commandlist: ^rc.CommandList) {
             }
             case rc.CreatePipeline: {
                 p: Pipeline
-                {
-                    desc := d3d12.COMMAND_QUEUE_DESC {
-                        Type = .DIRECT,
-                    }
-
-                    hr = s.device->CreateCommandQueue(&desc, d3d12.ICommandQueue_UUID, (^rawptr)(&p.queue))
-                    check(hr, s.info_queue, "Failed creating command queue")
-                }
-
+                
                 // Create the swapchain, it's the thing that contains render targets that we draw into. It has 2 render targets (NUM_RENDERTARGETS), giving us double buffering.
                 {
                     desc := dxgi.SWAP_CHAIN_DESC1 {
@@ -624,7 +649,7 @@ submit_command_list :: proc(s: ^State, commandlist: ^rc.CommandList) {
                         AlphaMode = .UNSPECIFIED,
                     };
 
-                    hr = s.factory->CreateSwapChainForHwnd((^dxgi.IUnknown)(p.queue), d3d12.HWND(uintptr(c.window_handle)), &desc, nil, nil, (^^dxgi.ISwapChain1)(&p.swapchain))
+                    hr = s.factory->CreateSwapChainForHwnd((^dxgi.IUnknown)(s.queue), d3d12.HWND(uintptr(c.window_handle)), &desc, nil, nil, (^^dxgi.ISwapChain1)(&p.swapchain))
                     check(hr, s.info_queue, "Failed to create swap chain")
                 }
 
@@ -971,9 +996,34 @@ submit_command_list :: proc(s: ^State, commandlist: ^rc.CommandList) {
                 set_resource(s, c.handle, rd)
             }
             case rc.CreateBuffer: {
-                // The position and color data for the triangle's vertices go together per-vertex
-                heap_props := d3d12.HEAP_PROPERTIES {
-                    Type = .UPLOAD,
+                upload_res: ^d3d12.IResource
+
+                {
+                    upload_desc := d3d12.RESOURCE_DESC {
+                        Dimension = .BUFFER,
+                        Width = u64(c.size),
+                        Height = 1,
+                        DepthOrArraySize = 1,
+                        MipLevels = 1,
+                        SampleDesc = { Count = 1, Quality = 0, },
+                        Layout = .ROW_MAJOR,
+                    }
+
+                    hr = s.device->CreateCommittedResource(
+                        &d3d12.HEAP_PROPERTIES { Type = .UPLOAD },
+                        .NONE,
+                        &upload_desc,
+                        .GENERIC_READ,
+                        nil,
+                        d3d12.IResource_UUID, (^rawptr)(&upload_res))
+
+                    check(hr, s.info_queue, "Failed creating commited resource")
+                    delay_destruction(s, upload_res, 2)
+
+                    upload_map: rawptr
+                    upload_res->Map(0, &d3d12.RANGE{}, &upload_map)
+                    mem.copy(upload_map, c.data, c.size)
+                    upload_res->Unmap(0, nil)
                 }
 
                 resource_desc := d3d12.RESOURCE_DESC {
@@ -993,15 +1043,12 @@ submit_command_list :: proc(s: ^State, commandlist: ^rc.CommandList) {
                     size = c.size,
                 }
 
-                hr = s.device->CreateCommittedResource(&heap_props, .NONE, &resource_desc, .GENERIC_READ, nil, d3d12.IResource_UUID, (^rawptr)(&rd.buffer))
+                hr = s.device->CreateCommittedResource(&d3d12.HEAP_PROPERTIES{ Type = .DEFAULT }, .NONE, &resource_desc, .COPY_DEST, nil, d3d12.IResource_UUID, (^rawptr)(&rd.buffer))
                 check(hr, s.info_queue, "Failed buffer")
 
-                gpu_data: rawptr
-                read_range: d3d12.RANGE
-                hr = rd.buffer->Map(0, &read_range, &gpu_data)
-                check(hr, s.info_queue, "Failed creating verex buffer resource")
-                mem.copy(gpu_data, c.data, c.size)
-                rd.buffer->Unmap(0, nil)
+                cmdlist->CopyBufferRegion(rd.buffer, 0, upload_res, 0, u64(c.size))
+
+                is_vertex := true
 
                 switch d in c.desc {
                     case rc.VertexBufferDesc: {
@@ -1017,10 +1064,27 @@ submit_command_list :: proc(s: ^State, commandlist: ^rc.CommandList) {
                             Format = .R32_UINT,
                             SizeInBytes = u32(c.size),
                         }
+
+                        is_vertex = false
                     }
                 }
 
                 set_resource(s, c.handle, rd)
+
+                b := d3d12.RESOURCE_BARRIER {
+                    Type = .TRANSITION,
+                    Flags = .NONE,
+                }
+
+                b.Transition = {
+                    pResource = rd.buffer,
+                    StateBefore = .COPY_DEST,
+                    StateAfter = is_vertex ? .VERTEX_AND_CONSTANT_BUFFER : .INDEX_BUFFER,
+                    Subresource = d3d12.RESOURCE_BARRIER_ALL_SUBRESOURCES,
+                }
+
+                cmdlist->ResourceBarrier(1, &b);
+
                 free(c.data)
             }
 
@@ -1130,23 +1194,16 @@ submit_command_list :: proc(s: ^State, commandlist: ^rc.CommandList) {
                     cmdlist->ResourceBarrier(1, &b);
                 }
 
-            case rc.Execute:
-                if p, ok := &s.resources[c.pipeline].resource.(Pipeline); ok {
-                    if !ensure_cmdlist(cmdlist) {
-                        break
-                    }
-
-                    hr = cmdlist->Close()
-                    check(hr, s.info_queue, "Failed to close command list")
-                    cmdlists := [?]^d3d12.IGraphicsCommandList { cmdlist }
-                    p.queue->ExecuteCommandLists(len(cmdlists), (^^d3d12.ICommandList)(&cmdlists[0]))
-
-                    s.cbv_heap_start += 33
-
-                    if s.cbv_heap_start > CBV_HEAP_SIZE {
-                        s.cbv_heap_start = 0
-                    }
+            case rc.Execute: {
+                if !ensure_cmdlist(cmdlist) {
+                    break
                 }
+
+                hr = cmdlist->Close()
+                check(hr, s.info_queue, "Failed to close command list")
+                cmdlists := [?]^d3d12.IGraphicsCommandList { cmdlist }
+                s.queue->ExecuteCommandLists(len(cmdlists), (^^d3d12.ICommandList)(&cmdlists[0]))
+            }
             
             case rc.Present:
                 if p, ok := &s.resources[c.handle].resource.(Pipeline); ok {
@@ -1156,8 +1213,14 @@ submit_command_list :: proc(s: ^State, commandlist: ^rc.CommandList) {
                     hr = p->swapchain->Present1(1, flags, &params)
                     check(hr, s.info_queue, "Present failed")
                     p.num_backbuffer_presents += 1
-                    p.queue->Signal(p.backbuffer_fence, p.num_backbuffer_presents)
+                    s.queue->Signal(p.backbuffer_fence, p.num_backbuffer_presents)
                     p.backbuffer_states[frame_index].fence_val = p.num_backbuffer_presents 
+
+                    s.cbv_heap_start += 33
+
+                    if s.cbv_heap_start > CBV_HEAP_SIZE {
+                        s.cbv_heap_start = 0
+                    }
                 }
         }
     }

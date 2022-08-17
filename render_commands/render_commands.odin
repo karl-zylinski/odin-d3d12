@@ -27,6 +27,10 @@ begin_pass :: proc(cmdlist: ^CommandList, pipeline: Handle) {
     append(&cmdlist.commands, BeginPass { pipeline = pipeline })
 }
 
+begin_resource_creation :: proc(cmdlist: ^CommandList) {
+    append(&cmdlist.commands, BeginResourceCreation{})
+}
+
 destroy_state :: proc(s: ^State) {
     delete(s.freelist)
 }
@@ -196,8 +200,8 @@ set_render_target :: proc(cmdlist: ^CommandList, pipeline: Handle) {
     })
 }
 
-execute :: proc(cmdlist: ^CommandList, pipeline: Handle) {
-    append(&cmdlist.commands, Execute{ pipeline = pipeline, })
+execute :: proc(cmdlist: ^CommandList) {
+    append(&cmdlist.commands, Execute{})
 }
 
 present :: proc(cmdlist: ^CommandList, pipeline: Handle) {
@@ -212,9 +216,7 @@ Present :: struct {
     handle: Handle,
 }
 
-Execute :: struct {
-    pipeline: Handle,
-}
+Execute :: struct {}
 
 CreateFence :: distinct Handle
 
@@ -333,6 +335,8 @@ BeginPass :: struct {
     pipeline: Handle,
 }
 
+BeginResourceCreation :: struct {}
+
 Command :: union {
     Noop,
     Present,
@@ -354,4 +358,5 @@ Command :: union {
     CreateTexture,
     SetTexture,
     BeginPass,
+    BeginResourceCreation,
 }
