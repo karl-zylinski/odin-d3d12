@@ -14,7 +14,7 @@ X We are passing pipeline objects everywhere. Many are just used to get to the c
 * d3d12 renderer should not be dependent on shader_system. I think?
 * Is BeginPass actually BeginDrawCall and DrawCall -> SubmitDrawCall. Maybe?
 * Fix build system include path so I dont have to write ".." in front of things. I.e. make my project like vendor: or core:
-* ResourceTransition command seems broken. There is no resource to set?
+X ResourceTransition command seems broken. There is no resource to set?
 * Vertex & index buffers bindless
 * Render something with a normal map and albedo
 * Render targets, render to off-screen target
