@@ -2,6 +2,7 @@ package zg
 
 import "core:fmt"
 import "core:mem"
+import "core:slice"
 import "core:strconv"
 import "core:strings"
 import "core:sys/windows"
@@ -193,7 +194,6 @@ load_obj_model :: proc(filename: string) -> ([dynamic]f32, [dynamic]u32, [dynami
 Renderable :: struct {
     vertex_buffer: render_types.Handle,
     index_buffer: render_types.Handle,
-    mvp_buffer: render_types.Handle,
     position: math.float4,
     shader: render_types.Handle,
 }
@@ -249,30 +249,25 @@ create_renderable :: proc(renderer_state: ^render_d3d12.State, rc_state: ^rc.Sta
     rc.execute(&cmdlist)
     render_d3d12.submit_command_list(renderer_state, &cmdlist)
 
-    ren.mvp_buffer = rc.create_constant(rc_state)
     ren.shader = shader
 
     return ren
 }
 
-render_renderable :: proc(rc_state: ^rc.State, pipeline: render_types.Handle, cmdlist: ^rc.CommandList, view: math.float4x4, ren: ^Renderable) {
+near :: f32(0.01)
+far :: f32(100)
+
+calc_mvp :: proc(view: math.float4x4, ren: ^Renderable) -> math.float4x4 {
     model: math.float4x4 = 1
     model[3].xyz = ren.position.xyz
 
-    mvp := math.mul(math.float4x4 {
+    return math.mul(math.float4x4 {
         1, 0, 0, 0,
         0, 1, 0, 0,
         0, 0, far/(far - near), (-far * near)/(far - near),
         0, 0, 1.0, 0,
     }, math.mul(view, model))
-
-    rc.upload_constant(cmdlist, pipeline, ren.mvp_buffer, &mvp)
-    rc.set_constant(cmdlist, pipeline, ren.shader, base.hash("mvp"), ren.mvp_buffer)
-    rc.draw_call(cmdlist, ren.vertex_buffer, ren.index_buffer)
 }
-
-near :: f32(0.01)
-far :: f32(100)
 
 run :: proc() {
     // Init SDL and create window
@@ -304,12 +299,14 @@ run :: proc() {
     rc_state: rc.State
     pipeline: render_types.Handle
     shader: render_types.Handle
+    constants_buffer: render_types.Handle
 
     {
         cmdlist := rc.create_command_list(&rc_state)
         pipeline = rc.create_pipeline(&cmdlist, f32(wx), f32(wy), render_types.WindowHandle(uintptr(window_handle)))
         shader_def := shader_system.load_shader("shader.shader")
         shader = rc.create_shader(&cmdlist, shader_def)
+        constants_buffer = rc.create_buffer(&cmdlist, nil, 4096, 0)
         render_d3d12.submit_command_list(&renderer_state, &cmdlist)
     }
 
@@ -435,10 +432,14 @@ run :: proc() {
         rc.set_texture(&cmdlist, shader, base.hash("albedo"), math.fract(t) > 0.5 ? texture : texture2)
         rc.set_texture(&cmdlist, shader, base.hash("albedo2"), texture2)
         rc.set_shader(&cmdlist, pipeline, shader)
-        rc.upload_constant(&cmdlist, pipeline, sun_pos_const, &sun_pos)
-        rc.set_constant(&cmdlist, pipeline, shader, base.hash("sun_pos"), sun_pos_const)
-        rc.upload_constant(&cmdlist, pipeline, color_const, &color)
-        rc.set_constant(&cmdlist, pipeline, shader, base.hash("color"), color_const)
+
+        constants := rc.BufferWithNamedOffsets {
+            data = make([dynamic]u8, context.temp_allocator),
+            offsets = make([dynamic]rc.NamedOffset, context.temp_allocator),
+        }
+
+        rc.buffer_append(&constants, &sun_pos, base.hash("sun_pos"))
+        rc.buffer_append(&constants, &color, base.hash("color"))
 
         rc.set_scissor(&cmdlist, { w = f32(wx), h = f32(wy), })
         rc.set_viewport(&cmdlist, { w = f32(wx), h = f32(wy), })
@@ -447,10 +448,16 @@ run :: proc() {
         rc.clear_render_target(&cmdlist, pipeline, {0, 0, 0, 1})
         rc.set_render_target(&cmdlist, pipeline)
 
-        {
-            render_renderable(&rc_state, pipeline, &cmdlist, view, &ren)
+        mvp := calc_mvp(view, &ren)
+        rc.buffer_append(&constants, &mvp, base.hash("mvp"))
+        rc.update_buffer(&cmdlist, constants_buffer, rawptr(&constants.data[0]), len(constants.data))
+        rc.set_constant_buffer(&cmdlist, constants_buffer)
+
+        for n in constants.offsets {
+            rc.set_constant(&cmdlist, shader, n.name, n.offset)
         }
 
+        rc.draw_call(&cmdlist, ren.vertex_buffer, ren.index_buffer)
         rc.resource_transition(&cmdlist, pipeline, .RenderTarget, .Present)
         rc.execute(&cmdlist)
         rc.present(&cmdlist, pipeline)
@@ -462,9 +469,6 @@ run :: proc() {
         rc.destroy_resource(&cmdlist, shader)
         rc.destroy_resource(&cmdlist, ren.vertex_buffer)
         rc.destroy_resource(&cmdlist, ren.index_buffer)
-        rc.destroy_resource(&cmdlist, color_const)
-        rc.destroy_resource(&cmdlist, sun_pos_const)
-        rc.destroy_resource(&cmdlist, ren.mvp_buffer)
         rc.destroy_resource(&cmdlist, pipeline)
         render_d3d12.submit_command_list(&renderer_state, &cmdlist)
     }

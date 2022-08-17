@@ -56,13 +56,6 @@ Pipeline :: struct {
     depth: ^d3d12.IResource,
     backbuffer_fence: ^d3d12.IFence,
     num_backbuffer_presents: u64,
-    constant_buffer_bindless: ^d3d12.IResource,
-    constant_buffer_bindless_map: rawptr,
-    constant_buffer_memory_info: map[rt.Handle]ConstantBufferMemory,
-    constant_buffer_bindless_index: int,
-    constant_buffers_destroyed: [dynamic]ConstantBufferMemory,
-
-    constant_buffer_desc: d3d12.CONSTANT_BUFFER_VIEW_DESC,
 
     backbuffer_states: [NUM_RENDERTARGETS]BackbufferState,
 
@@ -351,12 +344,7 @@ destroy_resource :: proc(s: ^State, handle: rt.Handle) {
         }
         case Pipeline: {
             r.swapchain->Release()
-            
             r.depth->Release()
-            
-            r.constant_buffer_bindless->Release()
-            delete(r.constant_buffer_memory_info)
-            delete(r.constant_buffers_destroyed)
 
             for bs in r.backbuffer_states {
                 bs.cmdallocator->Reset()
@@ -554,15 +542,22 @@ submit_command_list :: proc(s: ^State, commandlist: ^rc.CommandList) {
 
                 free(c.data)
             }
+            case rc.SetConstantBuffer: {
+                if b, ok := &s.resources[c.handle].resource.(Buffer); ok {
+                    constant_buffer_desc := d3d12.CONSTANT_BUFFER_VIEW_DESC {
+                        SizeInBytes = u32(b.size),
+                        BufferLocation = b.buffer->GetGPUVirtualAddress(),
+                    }
+
+                    s.device->CreateConstantBufferView(&constant_buffer_desc, get_cbv_handle(s, 0))
+                }
+            }
             case rc.SetShader: {
                 if shader, ok := &s.resources[c.handle].resource.(Shader); ok {
                     if p, ok := &s.resources[c.pipeline].resource.(Pipeline); ok {
                         if !ensure_cmdlist(cmdlist) {
                             break
                         }
-
-                        res_handle := get_cbv_handle(s, 0)
-                        s.device->CreateConstantBufferView(&p.constant_buffer_desc, res_handle)
 
                         cmdlist->SetGraphicsRootSignature(shader.root_signature)
                         table_handle: d3d12.GPU_DESCRIPTOR_HANDLE
@@ -575,47 +570,17 @@ submit_command_list :: proc(s: ^State, commandlist: ^rc.CommandList) {
                     }
                 }
             }
-            case rc.UploadConstant: {
-                if p, ok := &s.resources[c.pipeline].resource.(Pipeline); ok {
-                    h := c.constant
-                    cb_info, ok := p.constant_buffer_memory_info[h]
-
-                    if !ok {
-                        cb_info = {
-                            offset = p.constant_buffer_bindless_index,
-                            size = c.data_size
-                        }
-                        p.constant_buffer_bindless_index += c.data_size
-                        p.constant_buffer_memory_info[h] = cb_info
-                    }
-
-                    set_resource(s, h, cb_info)
-                    mem.copy(intrinsics.ptr_offset((^u8)(p.constant_buffer_bindless_map), cb_info.offset), rawptr(&c.data[0]), c.data_size)
-                }
-            }
             case rc.SetConstant: {
-                if shader, ok := &s.resources[c.shader].resource.(Shader); ok {
-                    if p, ok := &s.resources[c.pipeline].resource.(Pipeline); ok {
-                        if cb_info, ok := p.constant_buffer_memory_info[c.constant]; ok {
-                            for cb, arr_idx in &shader.constant_buffers {
-                                if cb.name == c.name {
-                                    if !ensure_cmdlist(cmdlist) {
-                                        break cmdswitch
-                                    }
-
-                                    cmdlist->SetGraphicsRoot32BitConstants(1, 1, &cb_info.offset, u32(arr_idx))
-                                    break;
-                                }
-                            }
-                        }
-                    }
+                if !ensure_cmdlist(cmdlist) {
+                    break cmdswitch
                 }
-            }
-            case rc.DestroyConstant: {
-                if p, ok := &s.resources[c.pipeline].resource.(Pipeline); ok {
-                    if cb_info, ok := p.constant_buffer_memory_info[c.constant]; ok {
-                        append(&p.constant_buffers_destroyed, cb_info)
-                        delete_key(&p.constant_buffer_memory_info, c.constant)
+
+                if shader, ok := &s.resources[c.shader].resource.(Shader); ok {
+                    for cb, arr_idx in &shader.constant_buffers {
+                        if cb.name == c.name {
+                            cmdlist->SetGraphicsRoot32BitConstants(1, 1, &c.offset, u32(arr_idx))
+                            break;
+                        }
                     }
                 }
             }
@@ -653,35 +618,7 @@ submit_command_list :: proc(s: ^State, commandlist: ^rc.CommandList) {
                     }
                 }
 
-                res_handle: d3d12.CPU_DESCRIPTOR_HANDLE
-
-                {
-                    heap_props := d3d12.HEAP_PROPERTIES {
-                        Type = .UPLOAD, 
-                    }
-
-                    resource_desc := d3d12.RESOURCE_DESC {
-                        Dimension = .BUFFER,
-                        Width = 10000000,
-                        Height = 1,
-                        DepthOrArraySize = 1,
-                        MipLevels = 1,
-                        SampleDesc = { Count = 1, Quality = 0, },
-                        Layout = .ROW_MAJOR,
-                    }
-
-                    hr = s.device->CreateCommittedResource(&heap_props, .NONE, &resource_desc, .GENERIC_READ, nil, d3d12.IResource_UUID, (^rawptr)(&p.constant_buffer_bindless))
-                    check(hr, s.info_queue, "Failed creating commited resource")
-
-                    r: d3d12.RANGE = {}
-                    p.constant_buffer_bindless->Map(0, &r, (^rawptr)(&p.constant_buffer_bindless_map))
-
-                    p.constant_buffer_desc = d3d12.CONSTANT_BUFFER_VIEW_DESC {
-                        SizeInBytes = 1024,
-                        BufferLocation = p.constant_buffer_bindless->GetGPUVirtualAddress(),
-                    }
-                }
-
+              
                 {
                     heap_props := d3d12.HEAP_PROPERTIES {
                         Type = .DEFAULT,
@@ -729,8 +666,6 @@ submit_command_list :: proc(s: ^State, commandlist: ^rc.CommandList) {
                     hr = p.backbuffer_states[i].cmdlist->Close()
                     check(hr, s.info_queue, "Failed to close command list")
                 }
-
-                p.constant_buffer_memory_info = make(map[rt.Handle]ConstantBufferMemory)
 
                 {
                     hr = s.device->CreateFence(0, .NONE, d3d12.IFence_UUID, (^rawptr)(&p.backbuffer_fence))
@@ -985,11 +920,11 @@ submit_command_list :: proc(s: ^State, commandlist: ^rc.CommandList) {
                 ss.free_shader(&def)
                 set_resource(s, c.handle, rd)
             }
-            
+
             case rc.CreateBuffer: {
                 upload_res: ^d3d12.IResource
 
-                {
+                if c.data != nil {
                     upload_desc := d3d12.RESOURCE_DESC {
                         Dimension = .BUFFER,
                         Width = u64(c.size),
@@ -1013,7 +948,7 @@ submit_command_list :: proc(s: ^State, commandlist: ^rc.CommandList) {
 
                     upload_map: rawptr
                     upload_res->Map(0, &d3d12.RANGE{}, &upload_map)
-                    mem.copy(upload_map, c.data, c.size)
+                    mem.copy(upload_map, c.data, c.size)    
                     upload_res->Unmap(0, nil)
                 }
 
@@ -1039,9 +974,15 @@ submit_command_list :: proc(s: ^State, commandlist: ^rc.CommandList) {
                 hr = s.device->CreateCommittedResource(&d3d12.HEAP_PROPERTIES{ Type = .DEFAULT }, .NONE, &resource_desc, .COPY_DEST, nil, d3d12.IResource_UUID, (^rawptr)(&rd.buffer))
                 check(hr, s.info_queue, "Failed buffer")
 
-                cmdlist->CopyBufferRegion(rd.buffer, 0, upload_res, 0, u64(c.size))
+                if upload_res != nil {
+                    cmdlist->CopyBufferRegion(rd.buffer, 0, upload_res, 0, u64(c.size))
+                }
+
                 set_resource(s, c.handle, rd)
-                free(c.data)
+
+                if c.data != nil {
+                    free(c.data)
+                }
             }
 
             case rc.UpdateBuffer: {
@@ -1050,7 +991,7 @@ submit_command_list :: proc(s: ^State, commandlist: ^rc.CommandList) {
                         return
                     }
 
-                    if !fmt.assertf(c.size > b.size, "New buffer won't fit inside old. Old size: %v. New size: %v", b.size, c.size) {
+                    if !fmt.assertf(b.size > c.size, "New buffer won't fit inside old. Old size: %v. New size: %v", b.size, c.size) {
                         return
                     }
 

@@ -1,5 +1,6 @@
 package render_commands
 
+import "core:slice"
 import "core:mem"
 import "../render_types"
 import "core:math/linalg/hlsl"
@@ -40,17 +41,39 @@ destroy_resource :: proc(cmdlist: ^CommandList, handle: Handle) {
     append(&cmdlist.state.freelist, handle)
 }
 
+update_buffer :: proc(cmdlist: ^CommandList, handle: Handle, data: rawptr, size: int) {
+    if data == nil {
+        return
+    }
+
+    c := UpdateBuffer {
+        handle = handle,
+        size = size,
+    }
+
+    if data != nil {
+        c.data = mem.alloc(size)
+        mem.copy(c.data, data, size)
+    }
+
+    append(&cmdlist.commands, c)
+}
+
+
 create_buffer :: proc(cmdlist: ^CommandList, data: rawptr, size: int, stride: int) -> Handle {
     h := get_handle(cmdlist.state)
 
     c := CreateBuffer {
         handle = h,
-        data = mem.alloc(size),
         size = size,
         stride = stride,
     }
 
-    mem.copy(c.data, data, size)
+    if data != nil {
+        c.data = mem.alloc(size)
+        mem.copy(c.data, data, size)
+    }
+
     append(&cmdlist.commands, c)
     return h
 }
@@ -86,28 +109,18 @@ create_constant :: proc(s: ^State) -> Handle {
     return h
 }
 
-upload_constant :: proc(cmdlist: ^CommandList, pipeline: Handle, constant: Handle, data: ^$T) {
-    c := UploadConstant {
-        constant = constant,
-        pipeline = pipeline,
-        data_size = size_of(data^),
-    }
-
-    mem.copy(rawptr(&c.data[0]), data, size_of(data^))
-    append(&cmdlist.commands, c)
-}
-
-set_constant :: proc(cmdlist: ^CommandList, pipeline: Handle, shader: Handle, name: base.StrHash, constant: Handle) {
-    append(&cmdlist.commands, SetConstant {
-        pipeline = pipeline,
-        shader = shader,
-        name = name,
-        constant = constant,
+set_constant_buffer :: proc(cmdlist: ^CommandList, handle: Handle) {
+    append(&cmdlist.commands, SetConstantBuffer {
+        handle = handle
     })
 }
 
-destroy_constant :: proc(cmdlist: ^CommandList, pipeline: Handle, constant: Handle) {
-    append(&cmdlist.commands, DestroyConstant { constant = constant, pipeline = pipeline })
+set_constant :: proc(cmdlist: ^CommandList, shader: Handle, name: base.StrHash, offset: int) {
+    append(&cmdlist.commands, SetConstant {
+        shader = shader,
+        name = name,
+        offset = offset,
+    })
 }
 
 create_texture :: proc(cmdlist: ^CommandList, format: render_types.TextureFormat, width: int, height: int, data: rawptr) -> Handle {
@@ -295,23 +308,10 @@ DestroyResource :: struct {
     handle: Handle,
 }
 
-UploadConstant :: struct {
-    data: [256]u8,
-    data_size: int,
-    pipeline: Handle,
-    constant: Handle,
-}
-
 SetConstant :: struct {
-    pipeline: Handle,
     shader: Handle,
     name: base.StrHash,
-    constant: Handle,
-}
-
-DestroyConstant :: struct {
-    constant: Handle,
-    pipeline: Handle,
+    offset: int,
 }
 
 CreateTexture :: struct {
@@ -334,6 +334,10 @@ BeginPass :: struct {
 
 BeginResourceCreation :: struct {}
 
+SetConstantBuffer :: struct {
+    handle: Handle,
+}
+
 Command :: union {
     Noop,
     Present,
@@ -349,12 +353,29 @@ Command :: union {
     CreateShader,
     SetShader,
     DestroyResource,
-    UploadConstant,
     SetConstant,
-    DestroyConstant,
     CreateTexture,
     SetTexture,
     BeginPass,
     BeginResourceCreation,
     UpdateBuffer,
+    SetConstantBuffer,
+}
+
+// Move this to some other file
+
+NamedOffset :: struct {
+    name: base.StrHash,
+    offset: int,
+}
+
+BufferWithNamedOffsets :: struct {
+    data: [dynamic]byte,
+    offsets: [dynamic]NamedOffset,
+}
+
+buffer_append :: proc(b: ^BufferWithNamedOffsets, val: ^$T, name: base.StrHash) {
+    offset := len(b.data)
+    append(&b.data, ..slice.bytes_from_ptr(val, size_of(val^)))
+    append(&b.offsets, NamedOffset { name = name, offset = offset })
 }
