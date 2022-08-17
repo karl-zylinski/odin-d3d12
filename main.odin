@@ -242,8 +242,8 @@ create_renderable :: proc(renderer_state: ^render_d3d12.State, rc_state: ^rc.Sta
 
     cmdlist := rc.create_command_list(rc_state)
     rc.begin_resource_creation(&cmdlist)
-    ren.vertex_buffer = rc.create_buffer(&cmdlist, rc.VertexBufferDesc { stride = 32 }, rawptr(&vertex_data[0]), vertex_buffer_size)
-    ren.index_buffer = rc.create_buffer(&cmdlist, rc.IndexBufferDesc { stride = 4 }, rawptr(&indices[0]), index_buffer_size)
+    ren.vertex_buffer = rc.create_buffer(&cmdlist, rawptr(&vertex_data[0]), vertex_buffer_size, 32)
+    ren.index_buffer = rc.create_buffer(&cmdlist, rawptr(&indices[0]), index_buffer_size, 4)
     rc.execute(&cmdlist)
     render_d3d12.submit_command_list(renderer_state, &cmdlist)
 

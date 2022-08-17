@@ -40,14 +40,14 @@ destroy_resource :: proc(cmdlist: ^CommandList, handle: Handle) {
     append(&cmdlist.state.freelist, handle)
 }
 
-create_buffer :: proc(cmdlist: ^CommandList, desc: BufferDesc, data: rawptr, size: int) -> Handle {
+create_buffer :: proc(cmdlist: ^CommandList, data: rawptr, size: int, stride: int) -> Handle {
     h := get_handle(cmdlist.state)
 
     c := CreateBuffer {
         handle = h,
-        desc = desc,
         data = mem.alloc(size),
         size = size,
+        stride = stride,
     }
 
     mem.copy(c.data, data, size)
@@ -220,24 +220,11 @@ Execute :: struct {}
 
 CreateFence :: distinct Handle
 
-VertexBufferDesc :: struct {
-    stride: u32,
-}
-
-IndexBufferDesc :: struct {
-    stride: u32,
-}
-
-BufferDesc :: union {
-    VertexBufferDesc,
-    IndexBufferDesc,
-}
-
 CreateBuffer :: struct {
     handle: Handle,
     data: rawptr,
     size: int,
-    desc: BufferDesc,
+    stride: int,
 }
 
 DrawCall :: struct {

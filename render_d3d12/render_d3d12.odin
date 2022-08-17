@@ -21,17 +21,10 @@ CBV_HEAP_SIZE :: 1000
 RTV_HEAP_SIZE :: 100
 DSV_HEAP_SIZE :: 10
 
-BufferView :: union {
-    d3d12.VERTEX_BUFFER_VIEW,
-    d3d12.INDEX_BUFFER_VIEW,
-}
-
 Buffer :: struct {
     buffer: ^d3d12.IResource,
-    staging_buffer: ^d3d12.IResource,
-    staging_buffer_updated: bool,
     size: int,
-    view: BufferView,
+    stride: int,
 }
 
 Fence :: struct {
@@ -340,10 +333,6 @@ destroy_resource :: proc(s: ^State, handle: rt.Handle) {
         case Buffer: {
             if r.buffer != nil {
                 r.buffer->Release()
-            }
-
-            if r.staging_buffer != nil {
-                r.staging_buffer->Release()
             }
 
             res^ = Resource{}
@@ -1041,6 +1030,7 @@ submit_command_list :: proc(s: ^State, commandlist: ^rc.CommandList) {
 
                 rd := Buffer {
                     size = c.size,
+                    stride = c.stride,
                 }
 
                 hr = s.device->CreateCommittedResource(&d3d12.HEAP_PROPERTIES{ Type = .DEFAULT }, .NONE, &resource_desc, .COPY_DEST, nil, d3d12.IResource_UUID, (^rawptr)(&rd.buffer))
@@ -1048,26 +1038,7 @@ submit_command_list :: proc(s: ^State, commandlist: ^rc.CommandList) {
 
                 cmdlist->CopyBufferRegion(rd.buffer, 0, upload_res, 0, u64(c.size))
 
-                is_vertex := true
-
-                switch d in c.desc {
-                    case rc.VertexBufferDesc: {
-                        rd.view = d3d12.VERTEX_BUFFER_VIEW {
-                            BufferLocation = rd.buffer->GetGPUVirtualAddress(),
-                            StrideInBytes = u32(d.stride),
-                            SizeInBytes = u32(c.size),
-                        }
-                    }
-                    case rc.IndexBufferDesc: {
-                        rd.view = d3d12.INDEX_BUFFER_VIEW {
-                            BufferLocation = rd.buffer->GetGPUVirtualAddress(),
-                            Format = .R32_UINT,
-                            SizeInBytes = u32(c.size),
-                        }
-
-                        is_vertex = false
-                    }
-                }
+                is_vertex := c.stride == 32
 
                 set_resource(s, c.handle, rd)
 
@@ -1157,11 +1128,19 @@ submit_command_list :: proc(s: ^State, commandlist: ^rc.CommandList) {
                 vb_view: d3d12.VERTEX_BUFFER_VIEW
                 ib_view: d3d12.INDEX_BUFFER_VIEW
                 if b, ok := &s.resources[c.vertex_buffer].resource.(Buffer); ok {
-                    vb_view, _ = b.view.(d3d12.VERTEX_BUFFER_VIEW)
+                    vb_view = {
+                        BufferLocation = b.buffer->GetGPUVirtualAddress(),
+                        StrideInBytes = u32(b.stride),
+                        SizeInBytes = u32(b.size),
+                    }
                 }
 
                 if b, ok := &s.resources[c.index_buffer].resource.(Buffer); ok {
-                    ib_view, _ = b.view.(d3d12.INDEX_BUFFER_VIEW)
+                    ib_view = {
+                        BufferLocation = b.buffer->GetGPUVirtualAddress(),
+                        Format = .R32_UINT,
+                        SizeInBytes = u32(b.size),
+                    }
                 }
 
                 num_indices := ib_view.SizeInBytes / 4
