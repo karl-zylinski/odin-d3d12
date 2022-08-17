@@ -53,8 +53,6 @@ Pipeline :: struct {
     num_backbuffer_presents: u64,
 
     backbuffer_states: [NUM_RENDERTARGETS]BackbufferState,
-
-    dsv_desc: d3d12.DEPTH_STENCIL_VIEW_DESC,
 }
 
 None :: struct {
@@ -634,11 +632,6 @@ submit_command_list :: proc(s: ^State, commandlist: ^rc.CommandList) {
                         d3d12.IResource_UUID,
                         (^rawptr)(&p.depth),
                     );
-
-                    p.dsv_desc = {
-                        Format = .D32_FLOAT,
-                        ViewDimension = .TEXTURE2D,
-                    }
                 }
 
                 for i := 0; i < NUM_RENDERTARGETS; i += 1 {
@@ -705,17 +698,7 @@ submit_command_list :: proc(s: ^State, commandlist: ^rc.CommandList) {
                     append(&rd.textures, ShaderTexture { name = base.hash(t.name) })
                 }
 
-                  /* 
-                From https://docs.microsoft.com/en-us/windows/win32/direct3d12/root-signatures-overview:
-                
-                    A root signature is configured by the app and links command lists to the resources the shaders require.
-                    The graphics command list has both a graphics and compute root signature. A compute command list will
-                    simply have one compute root signature. These root signatures are independent of each other.
-                */
-
                 {
-                    // create a descriptor range (descriptor table) and fill it out
-                    // this is a range of descriptors inside a descriptor heap
                     descriptor_table_ranges: []d3d12.DESCRIPTOR_RANGE = {
                         // Constant buffer blob
                         {
@@ -1046,7 +1029,12 @@ submit_command_list :: proc(s: ^State, commandlist: ^rc.CommandList) {
                     s.device->CreateRenderTargetView(rt, nil, rtv_handle);
 
                     dsv_handle := next_dsv_handle(s)
-                    s.device->CreateDepthStencilView(p.depth, &p.dsv_desc, dsv_handle);
+                    dsv_desc := d3d12.DEPTH_STENCIL_VIEW_DESC {
+                        Format = .D32_FLOAT,
+                        ViewDimension = .TEXTURE2D,
+                    }
+
+                    s.device->CreateDepthStencilView(p.depth, &dsv_desc, dsv_handle);
                     cmdlist->OMSetRenderTargets(1, &rtv_handle, false, &dsv_handle)
                 }
 
@@ -1063,7 +1051,12 @@ submit_command_list :: proc(s: ^State, commandlist: ^rc.CommandList) {
                     cmdlist->ClearRenderTargetView(rtv_handle, (^[4]f32)(&c.clear_color), 0, nil)
                     
                     dsv_handle := next_dsv_handle(s)
-                    s.device->CreateDepthStencilView(p.depth, &p.dsv_desc, dsv_handle);
+                    dsv_desc := d3d12.DEPTH_STENCIL_VIEW_DESC {
+                        Format = .D32_FLOAT,
+                        ViewDimension = .TEXTURE2D,
+                    }
+
+                    s.device->CreateDepthStencilView(p.depth, &dsv_desc, dsv_handle);
                     cmdlist->ClearDepthStencilView(dsv_handle, .DEPTH, 1.0, 0, 0, nil);
                 }
 
