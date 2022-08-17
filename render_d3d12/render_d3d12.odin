@@ -34,11 +34,6 @@ Fence :: struct {
     event: dxgi.HANDLE,
 }
 
-ConstantBufferMemory :: struct {
-    offset: int,
-    size: int,
-}
-
 DelayedDestroy :: struct {
     res: ^d3d12.IResource,
     destroy_at_frame: u64,
@@ -95,7 +90,6 @@ ResourceData :: union {
     Fence,
     Buffer,
     Shader,
-    ConstantBufferMemory,
     Texture,
 }
 
@@ -351,13 +345,6 @@ destroy_resource :: proc(s: ^State, handle: rt.Handle) {
                 bs.cmdlist->Release()    
             }
 
-            res^ = Resource{}
-        }
-        case ConstantBufferMemory: {
-            fmt.println("ConstantBufferMemory in destroy_resource not yet implemented")
-            // Todo: Should we do something here? All these die along with the pipeline anyways. What if someone calls
-            // destroy_resource on a constant buffer handle. Should we maybe not use renderer handles for
-            // constant buffers?
             res^ = Resource{}
         }
     }
