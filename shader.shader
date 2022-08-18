@@ -7,15 +7,15 @@
 
 SamplerState tex_sampler;
 
-struct PSInput {
+struct VertexOutput {
     float4 position : SV_POSITION;
     float3 world_pos : POSITION0;
     float3 normal : NORMAL;
     float2 uv : TEXCOORD0;
 };
 
-PSInput VSMain(float4 position : POSITION0, float3 normal : NORMAL0, float2 uv : TEXCOORD0) {
-    PSInput result;
+VertexOutput vertex_shader(float4 position : POSITION0, float3 normal : NORMAL0, float2 uv : TEXCOORD0) {
+    VertexOutput result;
     result.position = mul(get_mvp(), position);
     result.world_pos = position.xyz;
     result.normal = normal;
@@ -23,7 +23,7 @@ PSInput VSMain(float4 position : POSITION0, float3 normal : NORMAL0, float2 uv :
     return result;
 }
 
-float4 PSMain(PSInput input) : SV_TARGET {
+float4 pixel_shader(VertexOutput input) : SV_TARGET {
     float4 sc = float4(1,1,1,1);//get_color().Sample(tex_sampler, input.uv);
     float3 sun_dir = normalize(get_sun_pos() - input.world_pos);
     float3 n = get_normal().Sample(tex_sampler, input.uv).rgb;

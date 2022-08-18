@@ -667,7 +667,7 @@ submit_command_list :: proc(s: ^State, commandlist: ^rc.CommandList) {
 
                 errors: ^d3d12.IBlob = nil
 
-                hr = d3d_compiler.Compile(def.code, uint(def.code_size), nil, nil, nil, "VSMain", "vs_5_1", compile_flags, 0, &vs, &errors)
+                hr = d3d_compiler.Compile(def.code, uint(def.code_size), nil, nil, nil, "vertex_shader", "vs_5_1", compile_flags, 0, &vs, &errors)
                 errors_sz := errors != nil ? errors->GetBufferSize() : 0
 
                 if errors_sz > 0 {
@@ -678,7 +678,8 @@ submit_command_list :: proc(s: ^State, commandlist: ^rc.CommandList) {
 
                 check(hr, s.info_queue, "Failed to compile vertex shader")
 
-                hr = d3d_compiler.Compile(def.code, uint(def.code_size), nil, nil, nil, "PSMain", "ps_5_1", compile_flags, 0, &ps, &errors)
+                hr = d3d_compiler.Compile(def.code, uint(def.code_size), nil, nil, nil, "pixel_shader", "ps_5_1", compile_flags, 0, &ps, &errors)
+
 
                 errors_sz = errors != nil ? errors->GetBufferSize() : 0
 
