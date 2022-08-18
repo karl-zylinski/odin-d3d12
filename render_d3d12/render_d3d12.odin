@@ -5,6 +5,7 @@ import "core:mem"
 import "vendor:directx/d3d12"
 import "vendor:directx/dxgi"
 import "vendor:directx/d3d_compiler"
+import "vendor:directx/dxc"
 import "core:sys/windows"
 import "core:strings"
 import "core:os"
@@ -122,6 +123,10 @@ State :: struct {
     resource_cmdlist: ^d3d12.IGraphicsCommandList,
 
     queue: ^d3d12.ICommandQueue,
+
+    dxc_library: ^dxc.IDxcLibrary,
+    mjau: [1234]u32,
+    dxc_compiler: ^dxc.IDxcCompiler,
 }
 
 get_cbv_handle :: proc(s: ^State, offset: int) -> d3d12.CPU_DESCRIPTOR_HANDLE {
@@ -269,6 +274,13 @@ create :: proc(wx: i32, wy: i32, window_handle: dxgi.HWND) -> (s: State) {
         check(hr, s.info_queue, "Failed to close command list")
     }
 
+    // DXC
+    {
+        hr = dxc.CreateInstance(dxc.CLSID_DxcLibrary, dxc.IDxcLibrary_UUID, (^rawptr)(&s.dxc_library))
+        check(hr, s.info_queue, "Failed to create DXC library")
+        hr = dxc.CreateInstance(dxc.CLSID_DxcCompiler, dxc.IDxcCompiler_UUID, (^rawptr)(&s.dxc_compiler))
+        check(hr, s.info_queue, "Failed to create DXC compiler")
+    }
 
     return s
 }
@@ -354,12 +366,13 @@ set_resource :: proc(s: ^State, handle: rt.Handle, res: ResourceData) {
     s.resources[index] = { handle = handle, resource = res }
 }
 
-constant_buffer_type_size :: proc(t: ss.ConstantBufferType) -> int {
+constant_buffer_type_size :: proc(t: ss.ShaderType) -> int {
     switch (t) {
         case .None: return 0
         case .Float4x4: return 64
         case .Float4: return 16
         case .Float3: return 12
+        case .Float2: return 8
         case .Float: return 4
     }
 
@@ -418,6 +431,29 @@ submit_command_list :: proc(s: ^State, commandlist: ^rc.CommandList) {
 
                     cmdlist = bs.cmdlist
                     cmdlist->SetDescriptorHeaps(1, &s.cbv_heap);
+                }
+            }
+            case rc.SetBuffer: {
+                if shader, ok := &s.resources[c.shader].resource.(Shader); ok {
+                    if b, ok := &s.resources[c.buffer].resource.(Buffer); ok {
+                        res_handle := get_cbv_handle(s, 33)
+
+                        texture_srv_desc := d3d12.SHADER_RESOURCE_VIEW_DESC {
+                            Format = .R32_TYPELESS,
+                            ViewDimension = .BUFFER,
+                                    Shader4ComponentMapping = 5768,
+                        }
+
+                        texture_srv_desc.Buffer = {
+                            NumElements = u32(b.size) / 4,
+                        }
+
+                        texture_srv_desc.Buffer.Flags = .RAW
+
+
+                        s.device->CreateShaderResourceView(b.buffer, &texture_srv_desc, res_handle)
+                        break;
+                    }
                 }
             }
             case rc.SetTexture: {
@@ -531,7 +567,7 @@ submit_command_list :: proc(s: ^State, commandlist: ^rc.CommandList) {
                         BufferLocation = b.buffer->GetGPUVirtualAddress(),
                     }
 
-                    s.device->CreateConstantBufferView(&constant_buffer_desc, get_cbv_handle(s, 0))
+                    s.device->CreateConstantBufferView(&constant_buffer_desc, get_cbv_handle(s, c.offset))
                 }
             }
             case rc.SetShader: {
@@ -663,9 +699,51 @@ submit_command_list :: proc(s: ^State, commandlist: ^rc.CommandList) {
                 vs: ^d3d12.IBlob = nil
                 ps: ^d3d12.IBlob = nil
 
+                vs_compiled: ^dxc.IDxcBlob
+                ps_compiled: ^dxc.IDxcBlob
+
                 def := c.shader
 
-                errors: ^d3d12.IBlob = nil
+                {
+                    source_blob: ^dxc.IDxcBlobEncoding
+                    hr = s.dxc_library->CreateBlobWithEncodingOnHeapCopy(def.code, u32(def.code_size), dxc.CP_UTF8, &source_blob)
+                    check(hr, s.info_queue, "Failed creating shader blob")
+
+                    errors: ^dxc.IDxcBlobEncoding
+
+                    vs_res: ^dxc.IDxcOperationResult
+                    hr = s.dxc_compiler->Compile(source_blob, windows.utf8_to_wstring("shader.shader"), windows.utf8_to_wstring("vertex_shader"), windows.utf8_to_wstring("vs_6_2"), nil, 0, nil, 0, nil, &vs_res)
+                    check(hr, s.info_queue, "Failed compiling vertex shader")
+                    vs_res->GetResult(&vs_compiled)
+                    check(hr, s.info_queue, "Failed fetching compiled vertex shader")
+
+                    vs_res->GetErrorBuffer(&errors)
+                    errors_sz := errors != nil ? errors->GetBufferSize() : 0
+
+                    if errors_sz > 0 {
+                        errors_ptr := errors->GetBufferPointer()
+                        error_str := strings.string_from_ptr((^u8)(errors_ptr), int(errors_sz))
+                        fmt.println(error_str)
+                    }
+
+                    ps_res: ^dxc.IDxcOperationResult
+                    hr = s.dxc_compiler->Compile(source_blob, windows.utf8_to_wstring("shader.shader"), windows.utf8_to_wstring("pixel_shader"), windows.utf8_to_wstring("ps_6_2"), nil, 0, nil, 0, nil, &ps_res)
+                    check(hr, s.info_queue, "Failed compiling pixel shader")
+                    ps_res->GetResult(&ps_compiled)
+                    check(hr, s.info_queue, "Failed fetching compiled pixel shader")
+
+                    ps_res->GetErrorBuffer(&errors)
+                    errors_sz = errors != nil ? errors->GetBufferSize() : 0
+
+                    if errors_sz > 0 {
+                        errors_ptr := errors->GetBufferPointer()
+                        error_str := strings.string_from_ptr((^u8)(errors_ptr), int(errors_sz))
+                        fmt.println(error_str)
+                    }
+                }
+
+
+             /*   errors: ^d3d12.IBlob = nil
 
                 hr = d3d_compiler.Compile(def.code, uint(def.code_size), nil, nil, nil, "vertex_shader", "vs_5_1", compile_flags, 0, &vs, &errors)
                 errors_sz := errors != nil ? errors->GetBufferSize() : 0
@@ -689,7 +767,7 @@ submit_command_list :: proc(s: ^State, commandlist: ^rc.CommandList) {
                     fmt.println(error_str)
                 }
 
-                check(hr, s.info_queue, "Failed to compile pixel shader")
+                check(hr, s.info_queue, "Failed to compile pixel shader")*/
 
                 for cb, cb_idx in def.constant_buffers {
                     append(&rd.constant_buffers, ShaderConstantBuffer{ name = base.hash(cb.name) })
@@ -716,6 +794,15 @@ submit_command_list :: proc(s: ^State, commandlist: ^rc.CommandList) {
                             NumDescriptors = 32,
                             BaseShaderRegister = 0,
                             RegisterSpace = 1,
+                            OffsetInDescriptorsFromTableStart = d3d12.DESCRIPTOR_RANGE_OFFSET_APPEND,
+                        },
+
+                        // Vertex buffer
+                        {
+                            RangeType = .SRV,
+                            NumDescriptors = 1,
+                            BaseShaderRegister = 0,
+                            RegisterSpace = 2,
                             OffsetInDescriptorsFromTableStart = d3d12.DESCRIPTOR_RANGE_OFFSET_APPEND,
                         },
                     }
@@ -825,12 +912,12 @@ submit_command_list :: proc(s: ^State, commandlist: ^rc.CommandList) {
                 pipeline_state_desc := d3d12.GRAPHICS_PIPELINE_STATE_DESC {
                     pRootSignature = rd.root_signature,
                     VS = {
-                        pShaderBytecode = vs->GetBufferPointer(),
-                        BytecodeLength = vs->GetBufferSize(),
+                        pShaderBytecode = vs_compiled->GetBufferPointer(),
+                        BytecodeLength = vs_compiled->GetBufferSize(),
                     },
                     PS = {
-                        pShaderBytecode = ps->GetBufferPointer(),
-                        BytecodeLength = ps->GetBufferSize(),
+                        pShaderBytecode = ps_compiled->GetBufferPointer(),
+                        BytecodeLength = ps_compiled->GetBufferSize(),
                     },
                     StreamOutput = {},
                     BlendState = {
@@ -858,10 +945,10 @@ submit_command_list :: proc(s: ^State, commandlist: ^rc.CommandList) {
                         DepthFunc = .LESS,
                         StencilEnable = false,
                     },
-                    InputLayout = {
+                  /*  InputLayout = {
                         pInputElementDescs = &vertex_format[0],
                         NumElements = u32(len(vertex_format)),
-                    },
+                    },*/
                     PrimitiveTopologyType = .TRIANGLE,
                     NumRenderTargets = 1,
                     RTVFormats = { 0 = .R8G8B8A8_UNORM, 1..=7 = .UNKNOWN },
@@ -875,8 +962,8 @@ submit_command_list :: proc(s: ^State, commandlist: ^rc.CommandList) {
                 hr = s.device->CreateGraphicsPipelineState(&pipeline_state_desc, d3d12.IPipelineState_UUID, (^rawptr)(&rd.pipeline_state))
                 check(hr, s.info_queue, "Pipeline creation failed")
 
-                vs->Release()
-                ps->Release()
+                /*vs->Release()
+                ps->Release()*/
                 ss.free_shader(&def)
                 set_resource(s, c.handle, rd)
             }
@@ -887,7 +974,7 @@ submit_command_list :: proc(s: ^State, commandlist: ^rc.CommandList) {
                 if c.data != nil {
                     upload_desc := d3d12.RESOURCE_DESC {
                         Dimension = .BUFFER,
-                        Width = u64(c.size),
+                        Width = u64(c.data_size),
                         Height = 1,
                         DepthOrArraySize = 1,
                         MipLevels = 1,
@@ -908,7 +995,7 @@ submit_command_list :: proc(s: ^State, commandlist: ^rc.CommandList) {
 
                     upload_map: rawptr
                     upload_res->Map(0, &d3d12.RANGE{}, &upload_map)
-                    mem.copy(upload_map, c.data, c.size)    
+                    mem.copy(upload_map, c.data, c.data_size)    
                     upload_res->Unmap(0, nil)
                 }
 
@@ -935,7 +1022,7 @@ submit_command_list :: proc(s: ^State, commandlist: ^rc.CommandList) {
                 check(hr, s.info_queue, "Failed buffer")
 
                 if upload_res != nil {
-                    cmdlist->CopyBufferRegion(rd.buffer, 0, upload_res, 0, u64(c.size))
+                    cmdlist->CopyBufferRegion(rd.buffer, 0, upload_res, 0, u64(c.data_size))
                 }
 
                 set_resource(s, c.handle, rd)
@@ -1076,15 +1163,15 @@ submit_command_list :: proc(s: ^State, commandlist: ^rc.CommandList) {
                     break
                 }
 
-                vb_view: d3d12.VERTEX_BUFFER_VIEW
+            //    vb_view: d3d12.VERTEX_BUFFER_VIEW
                 ib_view: d3d12.INDEX_BUFFER_VIEW
-                if b, ok := &s.resources[c.vertex_buffer].resource.(Buffer); ok {
+              /*  if b, ok := &s.resources[c.vertex_buffer].resource.(Buffer); ok {
                     vb_view = {
                         BufferLocation = b.buffer->GetGPUVirtualAddress(),
                         StrideInBytes = u32(b.stride),
                         SizeInBytes = u32(b.size),
                     }
-                }
+                }*/
 
                 if b, ok := &s.resources[c.index_buffer].resource.(Buffer); ok {
                     ib_view = {
@@ -1096,7 +1183,7 @@ submit_command_list :: proc(s: ^State, commandlist: ^rc.CommandList) {
 
                 num_indices := ib_view.SizeInBytes / 4
                 cmdlist->IASetPrimitiveTopology(.TRIANGLELIST)
-                cmdlist->IASetVertexBuffers(0, 1, &vb_view)
+            //    cmdlist->IASetVertexBuffers(0, 1, &vb_view)
                 cmdlist->IASetIndexBuffer(&ib_view)
                 cmdlist->DrawIndexedInstanced(num_indices, 1, 0, 0, 0)
             }
@@ -1167,7 +1254,7 @@ submit_command_list :: proc(s: ^State, commandlist: ^rc.CommandList) {
                     s.queue->Signal(p.backbuffer_fence, p.num_backbuffer_presents)
                     p.backbuffer_states[frame_index].fence_val = p.num_backbuffer_presents 
 
-                    s.cbv_heap_start += 33
+                    s.cbv_heap_start += 34
 
                     if s.cbv_heap_start > CBV_HEAP_SIZE {
                         s.cbv_heap_start = 0
@@ -1184,6 +1271,7 @@ ri_to_d3d_state :: proc(ri_state: rc.ResourceState) -> d3d12.RESOURCE_STATES {
         case .Present: return .PRESENT
         case .RenderTarget: return .RENDER_TARGET
         case .CopyDest: return .COPY_DEST
+        case .ConstantBuffer: return .VERTEX_AND_CONSTANT_BUFFER
         case .VertexBuffer: return .VERTEX_AND_CONSTANT_BUFFER
         case .IndexBuffer: return .INDEX_BUFFER
     }

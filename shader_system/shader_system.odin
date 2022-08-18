@@ -4,16 +4,17 @@ import "core:os"
 import "core:strings"
 import "core:fmt"
 
-ConstantBufferType :: enum {
+ShaderType :: enum {
     None,
     Float4x4,
     Float4,
     Float3,
+    Float2,
     Float,
 }
 
 ConstantBuffer :: struct {
-    type: ConstantBufferType,
+    type: ShaderType,
     name: string,
 }
 
@@ -21,11 +22,17 @@ Texture2D :: struct {
     name: string,
 }
 
+VertexInput :: struct {
+    name: string,
+    type: ShaderType,
+}
+
 Shader :: struct {
     code: rawptr,
     code_size: int,
     constant_buffers: []ConstantBuffer,
     textures_2d: []Texture2D,
+    vertex_inputs: []VertexInput,
 }
 
 load_shader :: proc(path: string) -> Shader {
@@ -58,6 +65,7 @@ load_shader :: proc(path: string) -> Shader {
 
     CBufferMarker :: "#cbuffer"
     Texture2DMarker :: "#texture2d"
+    VertexInputMarker :: "#vertexinput"
 
     count_occurance :: proc(code: string, str: string, beginning_of_line: bool) -> int {
         n: int
@@ -82,13 +90,15 @@ load_shader :: proc(path: string) -> Shader {
         return code[start:i], i
     }
 
-    parse_cbuffer_type :: proc(type: string) -> ConstantBufferType {
+    parse_shader_type :: proc(type: string) -> ShaderType {
         if strings.equal_fold(type, "Float4x4") {
             return .Float4x4
         } else if strings.equal_fold(type, "Float4") {
             return .Float4
         } else if strings.equal_fold(type, "Float3") {
             return .Float3
+        } else if strings.equal_fold(type, "Float2") {
+            return .Float2
         } else if strings.equal_fold(type, "Float") {
             return .Float
         }
@@ -115,7 +125,7 @@ load_shader :: proc(path: string) -> Shader {
         i = skip_whitespace(code, i)
         type_str: string
         type_str, i = get_word(code, i)
-        cb.type = parse_cbuffer_type(type_str)
+        cb.type = parse_shader_type(type_str)
         i = skip_whitespace(code, i)
 
         if !first_on_line(code, i) {
@@ -124,6 +134,34 @@ load_shader :: proc(path: string) -> Shader {
         }
 
         return cb, i
+    }
+
+    parse_vertex_input :: proc(code: string, i_in: int) -> (VertexInput, int) {
+        i := i_in
+        vi: VertexInput
+
+        if !string_at(code, i, VertexInputMarker) {
+            return vi, i
+        }
+
+        i += len(VertexInputMarker)
+        i = skip_whitespace(code, i)
+
+        name: string
+        name, i = get_word(code, i)
+        vi.name = strings.clone(name)
+        i = skip_whitespace(code, i)
+        type_str: string
+        type_str, i = get_word(code, i)
+        vi.type = parse_shader_type(type_str)
+        i = skip_whitespace(code, i)
+
+        if !first_on_line(code, i) {
+            prop: string
+            prop, i = get_word(code, i)
+        }
+
+        return vi, i
     }
 
     get_line :: proc(code: string, i_in: int) -> (string, int) {
@@ -137,12 +175,13 @@ load_shader :: proc(path: string) -> Shader {
         return code[start:i], i
     }
 
-    hlsl_type :: proc(type: ConstantBufferType) -> string {
+    hlsl_type :: proc(type: ShaderType) -> string {
         switch type {
             case .None: return ""
             case .Float4x4: return "float4x4"
             case .Float4: return "float4"
             case .Float3: return "float3"
+            case .Float2: return "float2"
             case .Float: return "float"
         }
 
@@ -171,6 +210,7 @@ load_shader :: proc(path: string) -> Shader {
     parse_cbuffers :: proc(code: string, shader: ^Shader) {
         cbuf_idx := 0
         tex2d_idx := 0
+        vi_idx := 0
         code_builder := strings.builder_make(allocator = context.temp_allocator)
         for i := 0; i < len(code); i += 1 {
             if first_on_line(code, i) {
@@ -180,6 +220,9 @@ load_shader :: proc(path: string) -> Shader {
                 } else if string_at(code, i, Texture2DMarker) {
                     shader.textures_2d[tex2d_idx], i = parse_texture2d(code, i)
                     tex2d_idx += 1
+                } else if string_at(code, i, VertexInputMarker) {
+                    shader.vertex_inputs[vi_idx], i = parse_vertex_input(code, i)
+                    vi_idx += 1
                 } else {
                     line: string
                     line, i = get_line(code, i)
@@ -189,6 +232,19 @@ load_shader :: proc(path: string) -> Shader {
             }
         }
         generated := strings.builder_make(allocator = context.temp_allocator)
+
+        if len(shader.vertex_inputs) > 0 {
+            strings.write_string(&generated, "ByteAddressBuffer vertex_inputs : register(t0, space2);\n\n")
+
+            strings.write_string(&generated, "struct VertexInput {\n")
+
+            for vi in shader.vertex_inputs {
+                type_str := hlsl_type(vi.type)
+                strings.write_string(&generated, fmt.tprintf("\t%v %v;\n", type_str, vi.name))
+            }
+
+            strings.write_string(&generated, "};\n\n")
+        }
         
         if len(shader.constant_buffers) > 0 {
             strings.write_string(&generated, "ByteAddressBuffer constant_buffer : register(t0, space0);\n\n")
@@ -213,6 +269,9 @@ load_shader :: proc(path: string) -> Shader {
                     case .None: break
                     case .Float: {
                         strings.write_string(&generated, fmt.tprintf("\treturn asfloat(constant_buffer.Load(%v));\n", index_name))
+                    }
+                    case .Float2: {
+                        strings.write_string(&generated, fmt.tprintf("\treturn asfloat(constant_buffer.Load2(%v));\n", index_name))
                     }
                     case .Float3: {
                         strings.write_string(&generated, fmt.tprintf("\treturn asfloat(constant_buffer.Load3(%v));\n", index_name))
@@ -267,6 +326,7 @@ load_shader :: proc(path: string) -> Shader {
         s: Shader = {
             constant_buffers = make([]ConstantBuffer, count_occurance(code, CBufferMarker, true)),
             textures_2d = make([]Texture2D, count_occurance(code, Texture2DMarker, true)),
+            vertex_inputs = make([]VertexInput, count_occurance(code, VertexInputMarker, true)),
         }
 
         parse_cbuffers(code, &s)

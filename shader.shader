@@ -7,6 +7,10 @@
 
 SamplerState tex_sampler;
 
+#vertexinput position float3
+#vertexinput normal float3
+#vertexinput uv float2
+
 struct VertexOutput {
     float4 position : SV_POSITION;
     float3 world_pos : POSITION0;
@@ -14,12 +18,16 @@ struct VertexOutput {
     float2 uv : TEXCOORD0;
 };
 
-VertexOutput vertex_shader(float4 position : POSITION0, float3 normal : NORMAL0, float2 uv : TEXCOORD0) {
+VertexOutput vertex_shader(uint vertex_id : SV_VertexID) {
     VertexOutput result;
-    result.position = mul(get_mvp(), position);
-    result.world_pos = position.xyz;
-    result.normal = normal;
-    result.uv = uv;
+
+    VertexInput v = vertex_inputs.Load<VertexInput>(vertex_id * sizeof(VertexInput));
+
+    result.position = mul(get_mvp(), float4(v.position, 1));
+    result.world_pos = v.position.xyz;
+    result.normal = v.normal;
+    result.uv = v.uv;
+    
     return result;
 }
 

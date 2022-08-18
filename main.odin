@@ -249,9 +249,9 @@ create_renderable :: proc(renderer_state: ^render_d3d12.State, rc_state: ^rc.Sta
 
     cmdlist := rc.create_command_list(rc_state)
     rc.begin_resource_creation(&cmdlist)
-    ren.vertex_buffer = rc.create_buffer(&cmdlist, rawptr(&vertex_data[0]), vertex_buffer_size, 32)
-    rc.resource_transition(&cmdlist, ren.vertex_buffer, .CopyDest, .VertexBuffer)
-    ren.index_buffer = rc.create_buffer(&cmdlist, rawptr(&indices[0]), index_buffer_size, 4)
+    ren.vertex_buffer = rc.create_buffer(&cmdlist, vertex_buffer_size + (256 - vertex_buffer_size % 256), rawptr(&vertex_data[0]), vertex_buffer_size, 0)
+    rc.resource_transition(&cmdlist, ren.vertex_buffer, .CopyDest, .ConstantBuffer)
+    ren.index_buffer = rc.create_buffer(&cmdlist, index_buffer_size, rawptr(&indices[0]), index_buffer_size, 4)
     rc.resource_transition(&cmdlist, ren.index_buffer, .CopyDest, .IndexBuffer)
     rc.execute(&cmdlist)
     render_d3d12.submit_command_list(renderer_state, &cmdlist)
@@ -310,10 +310,13 @@ run :: proc() {
 
     {
         cmdlist := rc.create_command_list(&rc_state)
+        rc.begin_resource_creation(&cmdlist)
         pipeline = rc.create_pipeline(&cmdlist, f32(wx), f32(wy), render_types.WindowHandle(uintptr(window_handle)))
         shader_def := shader_system.load_shader("shader.shader")
         shader = rc.create_shader(&cmdlist, shader_def)
-        constants_buffer = rc.create_buffer(&cmdlist, nil, 4096, 0)
+        constants_buffer = rc.create_buffer(&cmdlist, 4096, nil, 0, 0)
+        rc.resource_transition(&cmdlist, constants_buffer, .CopyDest, .ConstantBuffer)
+        rc.execute(&cmdlist)
         render_d3d12.submit_command_list(&renderer_state, &cmdlist)
     }
 
@@ -473,8 +476,11 @@ run :: proc() {
 
         mvp := calc_mvp(view, &ren)
         rc.buffer_append(&constants, &mvp, base.hash("mvp"))
+        rc.resource_transition(&cmdlist, constants_buffer, .ConstantBuffer, .CopyDest)
         rc.update_buffer(&cmdlist, constants_buffer, rawptr(&constants.data[0]), len(constants.data))
-        rc.set_constant_buffer(&cmdlist, constants_buffer)
+        rc.resource_transition(&cmdlist, constants_buffer, .CopyDest, .ConstantBuffer)
+        rc.set_constant_buffer(&cmdlist, constants_buffer, 0)
+        rc.set_buffer(&cmdlist, shader, base.StrHash(0), ren.vertex_buffer)
 
         for n in constants.offsets {
             rc.set_constant(&cmdlist, shader, n.name, n.offset)

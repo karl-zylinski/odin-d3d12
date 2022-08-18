@@ -60,7 +60,7 @@ update_buffer :: proc(cmdlist: ^CommandList, handle: Handle, data: rawptr, size:
 }
 
 
-create_buffer :: proc(cmdlist: ^CommandList, data: rawptr, size: int, stride: int) -> Handle {
+create_buffer :: proc(cmdlist: ^CommandList, size: int, data: rawptr, data_size: int,  stride: int) -> Handle {
     h := get_handle(cmdlist.state)
 
     c := CreateBuffer {
@@ -71,6 +71,7 @@ create_buffer :: proc(cmdlist: ^CommandList, data: rawptr, size: int, stride: in
 
     if data != nil {
         c.data = mem.alloc(size)
+        c.data_size = data_size
         mem.copy(c.data, data, size)
     }
 
@@ -109,9 +110,10 @@ create_constant :: proc(s: ^State) -> Handle {
     return h
 }
 
-set_constant_buffer :: proc(cmdlist: ^CommandList, handle: Handle) {
+set_constant_buffer :: proc(cmdlist: ^CommandList, handle: Handle, offset: int) {
     append(&cmdlist.commands, SetConstantBuffer {
-        handle = handle
+        handle = handle,
+        offset = offset,
     })
 }
 
@@ -146,6 +148,14 @@ set_texture :: proc(cmdlist: ^CommandList, shader: Handle, name: base.StrHash, t
         shader = shader,
         name = name,
         texture = texture,
+    }) 
+}
+
+set_buffer :: proc(cmdlist: ^CommandList, shader: Handle, name: base.StrHash, buffer: Handle) {
+    append(&cmdlist.commands, SetBuffer {
+        shader = shader,
+        name = name,
+        buffer = buffer,
     }) 
 }
 
@@ -236,8 +246,9 @@ CreateFence :: distinct Handle
 
 CreateBuffer :: struct {
     handle: Handle,
-    data: rawptr,
     size: int,
+    data: rawptr,
+    data_size: int,
     stride: int,
 }
 
@@ -256,6 +267,7 @@ ResourceState :: enum {
     Present,
     RenderTarget,
     CopyDest,
+    ConstantBuffer,
     VertexBuffer,
     IndexBuffer,
 }
@@ -324,6 +336,12 @@ SetTexture :: struct {
     texture: Handle,
 }
 
+SetBuffer :: struct {
+    shader: Handle,
+    name: base.StrHash,
+    buffer: Handle,
+}
+
 BeginPass :: struct {
     pipeline: Handle,
 }
@@ -332,6 +350,7 @@ BeginResourceCreation :: struct {}
 
 SetConstantBuffer :: struct {
     handle: Handle,
+    offset: int,
 }
 
 Command :: union {
@@ -352,6 +371,7 @@ Command :: union {
     SetConstant,
     CreateTexture,
     SetTexture,
+    SetBuffer,
     BeginPass,
     BeginResourceCreation,
     UpdateBuffer,
