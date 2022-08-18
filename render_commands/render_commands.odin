@@ -201,16 +201,16 @@ resource_transition :: proc(cmdlist: ^CommandList, resource: Handle, before: Res
     })
 }
 
-clear_render_target :: proc(cmdlist: ^CommandList, pipeline: Handle, color: hlsl.float4) {
+clear_render_target :: proc(cmdlist: ^CommandList, resource: Handle, color: hlsl.float4) {
     append(&cmdlist.commands, ClearRenderTarget {
-        render_target = { pipeline = pipeline, },
+        resource = resource,
         clear_color = color,
     })
 }
 
-set_render_target :: proc(cmdlist: ^CommandList, pipeline: Handle) {
+set_render_target :: proc(cmdlist: ^CommandList, resource: Handle) {
     append(&cmdlist.commands, SetRenderTarget {
-        render_target = { pipeline = pipeline, },
+        resource = resource,
     })
 }
 
@@ -260,10 +260,6 @@ ResourceState :: enum {
     IndexBuffer,
 }
 
-RenderTarget :: struct {
-    pipeline: Handle,
-}
-
 ResourceTransition :: struct {
     resource: Handle,
     before: ResourceState,
@@ -271,12 +267,12 @@ ResourceTransition :: struct {
 }
 
 ClearRenderTarget :: struct {
-    render_target: RenderTarget,
+    resource: Handle,
     clear_color: hlsl.float4,
 }
 
 SetRenderTarget :: struct {
-    render_target: RenderTarget,
+    resource: Handle,
 }
 
 SetViewport :: struct {

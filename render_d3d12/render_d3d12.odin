@@ -749,9 +749,9 @@ submit_command_list :: proc(s: ^State, commandlist: ^rc.CommandList) {
                     // create a static sampler
                     sampler := d3d12.STATIC_SAMPLER_DESC {
                         Filter = .MIN_MAG_MIP_POINT,
-                        AddressU = .BORDER,
-                        AddressV = .BORDER,
-                        AddressW = .BORDER,
+                        AddressU = .CLAMP,
+                        AddressV = .CLAMP,
+                        AddressW = .CLAMP,
                         MipLODBias = 0,
                         MaxAnisotropy = 0,
                         ComparisonFunc = .NEVER,
@@ -1017,29 +1017,39 @@ submit_command_list :: proc(s: ^State, commandlist: ^rc.CommandList) {
                 })
             }
 
-            case rc.SetRenderTarget:
-                if p, ok := &s.resources[c.render_target.pipeline].resource.(Pipeline); ok {
-                    if !ensure_cmdlist(cmdlist) {
-                        break
-                    }
-
-                    rtv_handle := next_rtv_handle(s)
-                    frame_index := p->swapchain->GetCurrentBackBufferIndex()
-                    rt := p.backbuffer_states[frame_index].render_target
-                    s.device->CreateRenderTargetView(rt, nil, rtv_handle);
-
-                    dsv_handle := next_dsv_handle(s)
-                    dsv_desc := d3d12.DEPTH_STENCIL_VIEW_DESC {
-                        Format = .D32_FLOAT,
-                        ViewDimension = .TEXTURE2D,
-                    }
-
-                    s.device->CreateDepthStencilView(p.depth, &dsv_desc, dsv_handle);
-                    cmdlist->OMSetRenderTargets(1, &rtv_handle, false, &dsv_handle)
+            case rc.SetRenderTarget: {
+                if !ensure_cmdlist(cmdlist) {
+                    break
                 }
 
+                rt: ^d3d12.IResource
+                depth: ^d3d12.IResource
+
+                if p, ok := &s.resources[c.resource].resource.(Pipeline); ok {
+                    frame_index := p->swapchain->GetCurrentBackBufferIndex()   
+                    rt = p.backbuffer_states[frame_index].render_target
+                    depth = p.depth
+                }
+
+                if !fmt.assertf(rt != nil && depth != nil, "Could not resolve render target for resource %v", c.resource) {
+                    return
+                }
+
+                rtv_handle := next_rtv_handle(s)
+                s.device->CreateRenderTargetView(rt, nil, rtv_handle);
+
+                dsv_handle := next_dsv_handle(s)
+                dsv_desc := d3d12.DEPTH_STENCIL_VIEW_DESC {
+                    Format = .D32_FLOAT,
+                    ViewDimension = .TEXTURE2D,
+                }
+
+                s.device->CreateDepthStencilView(depth, &dsv_desc, dsv_handle);
+                cmdlist->OMSetRenderTargets(1, &rtv_handle, false, &dsv_handle)
+            }
+
             case rc.ClearRenderTarget: 
-                if p, ok := &s.resources[c.render_target.pipeline].resource.(Pipeline); ok {
+                if p, ok := &s.resources[c.resource].resource.(Pipeline); ok {
                     if !ensure_cmdlist(cmdlist) {
                         break
                     }

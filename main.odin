@@ -16,6 +16,7 @@ import "render_types"
 import "shader_system"
 import "base"
 import "math"
+import "core:image/png"
 
 load_obj_model :: proc(filename: string) -> ([dynamic]f32, [dynamic]u32, [dynamic]f32, [dynamic]u32, [dynamic]f32, [dynamic]u32)  {
     f, err := os.open(filename)
@@ -85,6 +86,12 @@ load_obj_model :: proc(filename: string) -> ([dynamic]f32, [dynamic]u32, [dynami
         i, n0 = parse_number(teapot, i)
         i = skip_whitespace(teapot, i)
         i, n1 = parse_number(teapot, i)
+
+        // There may be a third coordiante, that we skip for now
+        for teapot[i] != '\n' && teapot[i] != '\r' {
+            i += 1
+        }
+
         append(out, n0, n1)
         return i
     }
@@ -137,7 +144,7 @@ load_obj_model :: proc(filename: string) -> ([dynamic]f32, [dynamic]u32, [dynami
         }
 
         ti, _ := strconv.parse_int(teapot[start:i])
-        return i, u32(ii - 1), u32(ni - 1), u32(ti - 1)
+        return i, u32(ii - 1), u32(ti - 1), u32(ni - 1)
     }
 
     parse_face :: proc(teapot: string, i_in: int, out: ^[dynamic]u32, normal_indices_out: ^[dynamic]u32, texcoord_indices_out: ^[dynamic]u32) -> int {
@@ -254,8 +261,8 @@ create_renderable :: proc(renderer_state: ^render_d3d12.State, rc_state: ^rc.Sta
     return ren
 }
 
-near :: f32(0.01)
-far :: f32(100)
+near :: f32(0.1)
+far :: f32(10000)
 
 calc_mvp :: proc(view: math.float4x4, ren: ^Renderable) -> math.float4x4 {
     model: math.float4x4 = 1
@@ -310,19 +317,19 @@ run :: proc() {
         render_d3d12.submit_command_list(&renderer_state, &cmdlist)
     }
 
-    ren := create_renderable(&renderer_state, &rc_state, "capsule.obj", shader)
+    ren := create_renderable(&renderer_state, &rc_state, "stone3.obj", shader)
 
-    camera_pos := math.float3 { 0, 0, -1 }
+    camera_pos := math.float3 { 0, 0, -2 }
     camera_yaw: f32 = 0
     camera_pitch: f32 = 0
-    input: [4]bool
+    input: [6]bool
     t :f32= 0
 
     color_const := rc.create_constant(&rc_state)
     sun_pos_const := rc.create_constant(&rc_state)
 
     first_frame := true
-    texture, texture2: rc.Handle
+    color_tex, normal_tex: rc.Handle
 
     main_loop: for {
         t += 0.016
@@ -347,6 +354,12 @@ run :: proc() {
                     if e.key.keysym.sym == .D {
                         input[3] = false
                     }
+                    if e.key.keysym.sym == .Q {
+                        input[4] = false
+                    }
+                    if e.key.keysym.sym == .E {
+                        input[5] = false
+                    }
                 }
                 case .KEYDOWN:
                     if e.key.keysym.sym == .W {
@@ -360,6 +373,12 @@ run :: proc() {
                     }
                     if e.key.keysym.sym == .D {
                         input[3] = true
+                    }
+                    if e.key.keysym.sym == .Q {
+                        input[4] = true
+                    }
+                    if e.key.keysym.sym == .E {
+                        input[5] = true
                     }
 
                 case .MOUSEMOTION: {
@@ -385,6 +404,14 @@ run :: proc() {
             camera_pos += math.mul(camera_rot, math.float4{1,0,0,1}).xyz * 0.1
         }
 
+        if input[4] {
+            camera_pos -= math.mul(camera_rot, math.float4{0,1,0,1}).xyz * 0.1
+        }
+
+        if input[5] {
+            camera_pos += math.mul(camera_rot, math.float4{0,1,0,1}).xyz * 0.1
+        }
+
         camera_trans: math.float4x4 = 1
         camera_trans[3].xyz = ([3]f32)(camera_pos)
         view: math.float4x4 = math.inverse(math.mul(camera_trans, math.float4x4(camera_rot)))
@@ -394,7 +421,7 @@ run :: proc() {
         }
 
         sun_pos := math.float3 {
-            math.cos(t)*50, 0, math.sin(t)*50,
+            math.cos(f32(2))*50, 0, math.sin(f32(2))*50,
         }
         render_d3d12.update(&renderer_state)
 
@@ -404,23 +431,20 @@ run :: proc() {
 
         if first_frame == true {
             {
-                f, err := os.open("capsule0.raw")
-                defer os.close(f)
-                fs, _ := os.file_size(f)
-                img := make([]byte, fs, context.temp_allocator)
-                os.read(f, img)
+                tex, err := png.load("stone3_color.png")
 
-                texture = rc.create_texture(&cmdlist, .R8G8B8A8_UNORM, 2048, 1024, rawptr(&img[0]))
+                if err == nil {
+                    color_tex = rc.create_texture(&cmdlist, .R8G8B8A8_UNORM, tex.width, tex.height, &tex.pixels.buf[0])
+                }
+              
             }
 
             {
-                f, err := os.open("capsule1.raw")
-                defer os.close(f)
-                fs, _ := os.file_size(f)
-                img := make([]byte, fs, context.temp_allocator)
-                os.read(f, img)
+                nrm, err := png.load("stone3_normal.png")
 
-                texture2 = rc.create_texture(&cmdlist, .R8G8B8A8_UNORM, 2048, 1024, rawptr(&img[0]))
+                if err == nil {
+                    normal_tex = rc.create_texture(&cmdlist, .R8G8B8A8_UNORM, nrm.width, nrm.height, &nrm.pixels.buf[0])
+                }
             }
 
 
@@ -428,8 +452,8 @@ run :: proc() {
         }
 
 
-        rc.set_texture(&cmdlist, shader, base.hash("albedo"), math.fract(t) > 0.5 ? texture : texture2)
-        rc.set_texture(&cmdlist, shader, base.hash("albedo2"), texture2)
+        rc.set_texture(&cmdlist, shader, base.hash("color"), color_tex)
+        rc.set_texture(&cmdlist, shader, base.hash("normal"), normal_tex)
         rc.set_shader(&cmdlist, pipeline, shader)
 
         constants := rc.BufferWithNamedOffsets {
@@ -438,7 +462,7 @@ run :: proc() {
         }
 
         rc.buffer_append(&constants, &sun_pos, base.hash("sun_pos"))
-        rc.buffer_append(&constants, &color, base.hash("color"))
+        rc.buffer_append(&constants, &color, base.hash("tint"))
 
         rc.set_scissor(&cmdlist, { w = f32(wx), h = f32(wy), })
         rc.set_viewport(&cmdlist, { w = f32(wx), h = f32(wy), })
