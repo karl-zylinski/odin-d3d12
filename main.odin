@@ -8,15 +8,17 @@ import "core:strings"
 import "core:sys/windows"
 import "core:os"
 import "core:runtime"
+import "core:image/png"
+
 import "vendor:sdl2"
 import "vendor:directx/dxgi"
 import "render_d3d12"
-import rc "render_commands"
-import "render_types"
-import "shader_system"
-import "base"
-import "math"
-import "core:image/png"
+
+import rc "zoge:render_commands"
+import "zoge:render_types"
+import "zoge:shader_system"
+import "zoge:base"
+import "zoge:math"
 
 load_obj_model :: proc(filename: string) -> ([dynamic]f32, [dynamic]u32, [dynamic]f32, [dynamic]u32, [dynamic]f32, [dynamic]u32)  {
     f, err := os.open(filename)

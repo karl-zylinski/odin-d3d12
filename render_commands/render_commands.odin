@@ -2,11 +2,12 @@ package render_commands
 
 import "core:slice"
 import "core:mem"
-import "../render_types"
 import "core:math/linalg/hlsl"
-import "../math"
-import "../shader_system"
-import "../base"
+
+import "zoge:render_types"
+import "zoge:math"
+import "zoge:shader_system"
+import "zoge:base"
 
 // Public types
 

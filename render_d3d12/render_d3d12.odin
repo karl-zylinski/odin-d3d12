@@ -2,19 +2,21 @@ package render_d3d12
 
 import "core:fmt"
 import "core:mem"
-import "vendor:directx/d3d12"
-import "vendor:directx/dxgi"
-import "vendor:directx/d3d_compiler"
-import "vendor:directx/dxc"
 import "core:sys/windows"
 import "core:strings"
 import "core:os"
 import "core:log"
-import rc "../render_commands"
-import rt "../render_types"
-import ss "../shader_system"
 import "core:intrinsics"
-import "../base"
+
+import "vendor:directx/d3d12"
+import "vendor:directx/dxgi"
+import "vendor:directx/d3d_compiler"
+import "vendor:directx/dxc"
+
+import rc "zoge:render_commands"
+import rt "zoge:render_types"
+import ss "zoge:shader_system"
+import "zoge:base"
 
 NUM_RENDERTARGETS :: 2
 CONSTANT_BUFFER_UNINITIALIZED :: 0xFFFFFFFF
