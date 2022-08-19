@@ -10,14 +10,15 @@ import "../base"
 
 // Public types
 
-Handle :: union {
-    TextureHandle,
-    render_types.Handle,
-} 
+AnyHandle :: distinct render_types.Handle
+TextureHandle :: distinct render_types.Handle
+BufferHandle :: distinct render_types.Handle
+PipelineHandle :: distinct render_types.Handle
+ShaderHandle :: distinct render_types.Handle
 
 State :: struct {
-    max_handle: Handle,
-    freelist: [dynamic]Handle,
+    max_handle: render_types.Handle,
+    freelist: [dynamic]render_types.Handle,
 }
 
 CommandList :: struct {
@@ -27,7 +28,7 @@ CommandList :: struct {
 
 // Public procs
 
-begin_pass :: proc(cmdlist: ^CommandList, pipeline: Handle) {
+begin_pass :: proc(cmdlist: ^CommandList, pipeline: PipelineHandle) {
     append(&cmdlist.commands, BeginPass { pipeline = pipeline })
 }
 
@@ -39,12 +40,12 @@ destroy_state :: proc(s: ^State) {
     delete(s.freelist)
 }
 
-destroy_resource :: proc(cmdlist: ^CommandList, handle: Handle) {
-    append(&cmdlist.commands, DestroyResource { handle = handle })
-    append(&cmdlist.state.freelist, handle)
+destroy_resource :: proc(cmdlist: ^CommandList, handle: $T/render_types.Handle) {
+    append(&cmdlist.commands, DestroyResource { handle = AnyHandle(handle) })
+    append(&cmdlist.state.freelist, render_types.Handle(handle))
 }
 
-update_buffer :: proc(cmdlist: ^CommandList, handle: Handle, data: rawptr, size: int) {
+update_buffer :: proc(cmdlist: ^CommandList, handle: BufferHandle, data: rawptr, size: int) {
     if data == nil {
         return
     }
@@ -63,8 +64,8 @@ update_buffer :: proc(cmdlist: ^CommandList, handle: Handle, data: rawptr, size:
 }
 
 
-create_buffer :: proc(cmdlist: ^CommandList, size: int, data: rawptr, data_size: int,  stride: int) -> Handle {
-    h := get_handle(cmdlist.state)
+create_buffer :: proc(cmdlist: ^CommandList, size: int, data: rawptr, data_size: int,  stride: int) -> BufferHandle {
+    h := BufferHandle(get_handle(cmdlist.state))
 
     c := CreateBuffer {
         handle = h,
@@ -82,8 +83,8 @@ create_buffer :: proc(cmdlist: ^CommandList, size: int, data: rawptr, data_size:
     return h
 }
 
-create_pipeline :: proc(cmdlist: ^CommandList, x: f32, y: f32, window_handle: render_types.WindowHandle) -> Handle {
-    h := get_handle(cmdlist.state)
+create_pipeline :: proc(cmdlist: ^CommandList, x: f32, y: f32, window_handle: render_types.WindowHandle) -> PipelineHandle {
+    h := PipelineHandle(get_handle(cmdlist.state))
 
     c := CreatePipeline {
         handle = h,
@@ -96,8 +97,8 @@ create_pipeline :: proc(cmdlist: ^CommandList, x: f32, y: f32, window_handle: re
     return h
 }
 
-create_shader :: proc(cmdlist: ^CommandList, shader: shader_system.Shader) -> Handle {
-    h := get_handle(cmdlist.state)
+create_shader :: proc(cmdlist: ^CommandList, shader: shader_system.Shader) -> ShaderHandle {
+    h := ShaderHandle(get_handle(cmdlist.state))
 
     c := CreateShader {
         handle = h,
@@ -108,15 +109,9 @@ create_shader :: proc(cmdlist: ^CommandList, shader: shader_system.Shader) -> Ha
     return h
 }
 
-create_constant :: proc(s: ^State) -> Handle {
-    h := get_handle(s)
-    return h
-}
-
-set_constant_buffer :: proc(cmdlist: ^CommandList, handle: Handle, offset: int) {
+set_constant_buffer :: proc(cmdlist: ^CommandList, handle: BufferHandle) {
     append(&cmdlist.commands, SetConstantBuffer {
         handle = handle,
-        offset = offset,
     })
 }
 
@@ -127,10 +122,8 @@ set_constant :: proc(cmdlist: ^CommandList, name: base.StrHash, offset: int) {
     })
 }
 
-TextureHandle :: distinct render_types.Handle
-
 create_texture :: proc(cmdlist: ^CommandList, format: render_types.TextureFormat, width: int, height: int, data: rawptr) -> TextureHandle {
-    h := get_handle(cmdlist.state)
+    h := TextureHandle(get_handle(cmdlist.state))
 
     tx_size := render_types.texture_size(format, width, height)
 
@@ -154,14 +147,14 @@ set_texture :: proc(cmdlist: ^CommandList, name: base.StrHash, texture: TextureH
     }) 
 }
 
-draw_call :: proc(cmdlist: ^CommandList, vertex_buffer: Handle, index_buffer: Handle) {
+draw_call :: proc(cmdlist: ^CommandList, vertex_buffer: BufferHandle, index_buffer: BufferHandle) {
     append(&cmdlist.commands, DrawCall {
         vertex_buffer = vertex_buffer,
         index_buffer = index_buffer,
     })
 }
 
-get_handle :: proc(s: ^State) -> Handle {
+get_handle :: proc(s: ^State) -> render_types.Handle {
     if len(s.freelist) > 0 {
         return pop(&s.freelist)
     }
@@ -179,7 +172,7 @@ destroy_command_list :: proc(cmdlist: ^CommandList) {
     delete(cmdlist.commands)
 }
 
-set_shader :: proc(cmdlist: ^CommandList, shader: Handle) {
+set_shader :: proc(cmdlist: ^CommandList, shader: ShaderHandle) {
     append(&cmdlist.commands, SetShader {
         handle = shader,
     })
@@ -197,32 +190,44 @@ set_viewport :: proc(cmdlist: ^CommandList, rect: math.Rect) {
     })
 }
 
-resource_transition :: proc(cmdlist: ^CommandList, resource: Handle, before: ResourceState, after: ResourceState) {
+resource_transition :: proc(cmdlist: ^CommandList, handle: $T/render_types.Handle, before: ResourceState, after: ResourceState) {
     append(&cmdlist.commands, ResourceTransition {
-        resource = resource,
+        resource = AnyHandle(handle),
         before = before,
         after = after,
     })
 }
 
-clear_render_target :: proc(cmdlist: ^CommandList, resource: Handle, color: hlsl.float4) {
+clear_render_target_handle :: proc(cmdlist: ^CommandList, resource: AnyHandle, color: hlsl.float4) {
     append(&cmdlist.commands, ClearRenderTarget {
         resource = resource,
         clear_color = color,
     })
 }
 
-set_render_target :: proc(cmdlist: ^CommandList, resource: Handle) {
+clear_render_target_pipeline :: proc(cmdlist: ^CommandList, pipeline: PipelineHandle, color: hlsl.float4) {
+    clear_render_target_handle(cmdlist, AnyHandle(pipeline), color)
+}
+
+clear_render_target :: proc{clear_render_target_handle, clear_render_target_pipeline}
+
+set_render_target_handle :: proc(cmdlist: ^CommandList, resource: AnyHandle) {
     append(&cmdlist.commands, SetRenderTarget {
         resource = resource,
     })
 }
 
+set_render_target_pipeline :: proc(cmdlist: ^CommandList, pipeline: PipelineHandle) {
+    set_render_target_handle(cmdlist, AnyHandle(pipeline))
+}
+
+set_render_target :: proc{set_render_target_handle, set_render_target_pipeline}
+
 execute :: proc(cmdlist: ^CommandList) {
     append(&cmdlist.commands, Execute{})
 }
 
-present :: proc(cmdlist: ^CommandList, pipeline: Handle) {
+present :: proc(cmdlist: ^CommandList, pipeline: PipelineHandle) {
     append(&cmdlist.commands, Present{ handle = pipeline })
 }
 
@@ -231,15 +236,13 @@ present :: proc(cmdlist: ^CommandList, pipeline: Handle) {
 Noop :: struct {}
 
 Present :: struct {
-    handle: Handle,
+    handle: PipelineHandle,
 }
 
 Execute :: struct {}
 
-CreateFence :: distinct Handle
-
 CreateBuffer :: struct {
-    handle: Handle,
+    handle: BufferHandle,
     size: int,
     data: rawptr,
     data_size: int,
@@ -247,14 +250,14 @@ CreateBuffer :: struct {
 }
 
 UpdateBuffer :: struct {
-    handle: Handle,
+    handle: BufferHandle,
     data: rawptr,
     size: int,
 }
 
 DrawCall :: struct {
-    vertex_buffer: Handle,
-    index_buffer: Handle,
+    vertex_buffer: BufferHandle,
+    index_buffer: BufferHandle,
 }
 
 ResourceState :: enum {
@@ -267,18 +270,18 @@ ResourceState :: enum {
 }
 
 ResourceTransition :: struct {
-    resource: Handle,
+    resource: AnyHandle,
     before: ResourceState,
     after: ResourceState,
 }
 
 ClearRenderTarget :: struct {
-    resource: Handle,
+    resource: AnyHandle,
     clear_color: hlsl.float4,
 }
 
 SetRenderTarget :: struct {
-    resource: Handle,
+    resource: AnyHandle,
 }
 
 SetViewport :: struct {
@@ -290,23 +293,23 @@ SetScissor :: struct {
 }
 
 CreatePipeline :: struct {
-    handle: Handle,
+    handle: PipelineHandle,
     swapchain_x, swapchain_y: f32,
     window_handle: render_types.WindowHandle,
 }
 
 CreateShader :: struct {
-    handle: Handle,
-    pipeline: Handle,
+    handle: ShaderHandle,
+    pipeline: PipelineHandle,
     shader: shader_system.Shader,
 }
 
 SetShader :: struct {
-    handle: Handle,
+    handle: ShaderHandle,
 }
 
 DestroyResource :: struct {
-    handle: Handle,
+    handle: AnyHandle,
 }
 
 SetConstant :: struct {
@@ -315,7 +318,7 @@ SetConstant :: struct {
 }
 
 CreateTexture :: struct {
-    handle: Handle,
+    handle: TextureHandle,
     data: rawptr,
     format: render_types.TextureFormat,
     width: int,
@@ -328,14 +331,14 @@ SetTexture :: struct {
 }
 
 BeginPass :: struct {
-    pipeline: Handle,
+    pipeline: PipelineHandle,
 }
 
 BeginResourceCreation :: struct {}
 
+
 SetConstantBuffer :: struct {
-    handle: Handle,
-    offset: int,
+    handle: BufferHandle,
 }
 
 Command :: union {

@@ -199,13 +199,13 @@ load_obj_model :: proc(filename: string) -> ([dynamic]f32, [dynamic]u32, [dynami
 }
 
 Renderable :: struct {
-    vertex_buffer: rc.Handle,
-    index_buffer: rc.Handle,
+    vertex_buffer: rc.BufferHandle,
+    index_buffer: rc.BufferHandle,
     position: math.float4,
-    shader: rc.Handle,
+    shader: rc.ShaderHandle,
 }
 
-create_renderable :: proc(renderer_state: ^render_d3d12.State, rc_state: ^rc.State, filename: string, shader: render_types.Handle) -> (ren: Renderable) {
+create_renderable :: proc(renderer_state: ^render_d3d12.State, rc_state: ^rc.State, filename: string, shader: rc.ShaderHandle) -> (ren: Renderable) {
     vertices, indices, normals, normal_indices, texcoords, texcoord_indices := load_obj_model(filename)
     defer delete(vertices)
     defer delete(indices)
@@ -304,9 +304,9 @@ run :: proc() {
     window_handle := dxgi.HWND(window_info.info.win.window)
     renderer_state := render_d3d12.create(wx, wy, window_handle)
     rc_state: rc.State
-    pipeline: rc.Handle
-    shader: rc.Handle
-    constants_buffer: rc.Handle
+    pipeline: rc.PipelineHandle
+    shader: rc.ShaderHandle
+    constants_buffer: rc.BufferHandle
     color_tex, normal_tex: rc.TextureHandle
 
     {
@@ -341,9 +341,6 @@ run :: proc() {
     camera_pitch: f32 = 0
     input: [6]bool
     t :f32= 0
-
-    color_const := rc.create_constant(&rc_state)
-    sun_pos_const := rc.create_constant(&rc_state)
 
     main_loop: for {
         t += 0.016
@@ -466,7 +463,7 @@ run :: proc() {
         rc.resource_transition(&cmdlist, constants_buffer, .ConstantBuffer, .CopyDest)
         rc.update_buffer(&cmdlist, constants_buffer, rawptr(&constants.data[0]), len(constants.data))
         rc.resource_transition(&cmdlist, constants_buffer, .CopyDest, .ConstantBuffer)
-        rc.set_constant_buffer(&cmdlist, constants_buffer, 0)
+        rc.set_constant_buffer(&cmdlist, constants_buffer)
 
         for n in constants.offsets {
             rc.set_constant(&cmdlist, n.name, n.offset)

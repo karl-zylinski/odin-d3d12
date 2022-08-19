@@ -373,7 +373,7 @@ destroy :: proc(s: ^State) {
     delete(s.delayed_destroy)
 }
 
-destroy_resource :: proc(s: ^State, handle: rt.Handle) {
+destroy_resource :: proc(s: ^State, handle: rc.AnyHandle) {
     res := &s.resources[handle]
 
     switch r in res.resource {
@@ -417,14 +417,14 @@ destroy_resource :: proc(s: ^State, handle: rt.Handle) {
     }
 }
 
-set_resource :: proc(s: ^State, handle: rt.Handle, res: ResourceData) {
+set_resource :: proc(s: ^State, handle: $T/rt.Handle, res: ResourceData) {
     index := int(handle)
 
     if len(s.resources) < index + 1 {
         resize(&s.resources, index + 1)
     }
 
-    s.resources[index] = { handle = handle, resource = res }
+    s.resources[index] = { handle = rt.Handle(handle), resource = res }
 }
 
 constant_buffer_type_size :: proc(t: ss.ShaderType) -> int {
