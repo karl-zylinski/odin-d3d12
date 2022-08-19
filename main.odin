@@ -199,10 +199,10 @@ load_obj_model :: proc(filename: string) -> ([dynamic]f32, [dynamic]u32, [dynami
 }
 
 Renderable :: struct {
-    vertex_buffer: render_types.Handle,
-    index_buffer: render_types.Handle,
+    vertex_buffer: rc.Handle,
+    index_buffer: rc.Handle,
     position: math.float4,
-    shader: render_types.Handle,
+    shader: rc.Handle,
 }
 
 create_renderable :: proc(renderer_state: ^render_d3d12.State, rc_state: ^rc.State, filename: string, shader: render_types.Handle) -> (ren: Renderable) {
@@ -304,9 +304,10 @@ run :: proc() {
     window_handle := dxgi.HWND(window_info.info.win.window)
     renderer_state := render_d3d12.create(wx, wy, window_handle)
     rc_state: rc.State
-    pipeline: render_types.Handle
-    shader: render_types.Handle
-    constants_buffer: render_types.Handle
+    pipeline: rc.Handle
+    shader: rc.Handle
+    constants_buffer: rc.Handle
+    color_tex, normal_tex: rc.TextureHandle
 
     {
         cmdlist := rc.create_command_list(&rc_state)
@@ -316,6 +317,19 @@ run :: proc() {
         shader = rc.create_shader(&cmdlist, shader_def)
         constants_buffer = rc.create_buffer(&cmdlist, 4096, nil, 0, 0)
         rc.resource_transition(&cmdlist, constants_buffer, .CopyDest, .ConstantBuffer)
+
+        {
+            ta := base.make_temp_arena()
+
+            if tex, err := png.load("stone3_color.png", {}, ta); err == nil {
+                color_tex = rc.create_texture(&cmdlist, .R8G8B8A8_UNORM, tex.width, tex.height, &tex.pixels.buf[0])
+            }
+
+            if tex, err := png.load("stone3_normal.png", {}, ta); err == nil {
+                normal_tex = rc.create_texture(&cmdlist, .R8G8B8A8_UNORM, tex.width, tex.height, &tex.pixels.buf[0])
+            }
+        }
+
         rc.execute(&cmdlist)
         render_d3d12.submit_command_list(&renderer_state, &cmdlist)
     }
@@ -330,9 +344,6 @@ run :: proc() {
 
     color_const := rc.create_constant(&rc_state)
     sun_pos_const := rc.create_constant(&rc_state)
-
-    first_frame := true
-    color_tex, normal_tex: rc.Handle
 
     main_loop: for {
         t += 0.016
@@ -424,40 +435,16 @@ run :: proc() {
         }
 
         sun_pos := math.float3 {
-            math.cos(f32(2))*50, 0, math.sin(f32(2))*50,
+            math.cos(f32(t))*50, 0, math.sin(f32(t))*50,
         }
         render_d3d12.update(&renderer_state)
 
         cmdlist := rc.create_command_list(&rc_state)
 
         rc.begin_pass(&cmdlist, pipeline)
-
-        if first_frame == true {
-            {
-                tex, err := png.load("stone3_color.png")
-
-                if err == nil {
-                    color_tex = rc.create_texture(&cmdlist, .R8G8B8A8_UNORM, tex.width, tex.height, &tex.pixels.buf[0])
-                }
-              
-            }
-
-            {
-                nrm, err := png.load("stone3_normal.png")
-
-                if err == nil {
-                    normal_tex = rc.create_texture(&cmdlist, .R8G8B8A8_UNORM, nrm.width, nrm.height, &nrm.pixels.buf[0])
-                }
-            }
-
-
-            first_frame = false
-        }
-
-
-        rc.set_texture(&cmdlist, shader, base.hash("color"), color_tex)
-        rc.set_texture(&cmdlist, shader, base.hash("normal"), normal_tex)
-        rc.set_shader(&cmdlist, pipeline, shader)
+        rc.set_shader(&cmdlist, shader)
+        rc.set_texture(&cmdlist, base.hash("color"), color_tex)
+        rc.set_texture(&cmdlist, base.hash("normal"), normal_tex)
 
         constants := rc.BufferWithNamedOffsets {
             data = make([dynamic]u8, context.temp_allocator),
@@ -480,10 +467,9 @@ run :: proc() {
         rc.update_buffer(&cmdlist, constants_buffer, rawptr(&constants.data[0]), len(constants.data))
         rc.resource_transition(&cmdlist, constants_buffer, .CopyDest, .ConstantBuffer)
         rc.set_constant_buffer(&cmdlist, constants_buffer, 0)
-        rc.set_buffer(&cmdlist, shader, base.StrHash(0), ren.vertex_buffer)
 
         for n in constants.offsets {
-            rc.set_constant(&cmdlist, shader, n.name, n.offset)
+            rc.set_constant(&cmdlist, n.name, n.offset)
         }
 
         rc.draw_call(&cmdlist, ren.vertex_buffer, ren.index_buffer)
@@ -499,6 +485,9 @@ run :: proc() {
         rc.destroy_resource(&cmdlist, ren.vertex_buffer)
         rc.destroy_resource(&cmdlist, ren.index_buffer)
         rc.destroy_resource(&cmdlist, pipeline)
+        rc.destroy_resource(&cmdlist, color_tex)
+        rc.destroy_resource(&cmdlist, normal_tex)
+        rc.destroy_resource(&cmdlist, constants_buffer)
         render_d3d12.submit_command_list(&renderer_state, &cmdlist)
     }
     

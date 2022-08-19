@@ -1,6 +1,6 @@
 TODO:
 
-* CBV heap is currently advanced by 33 slots each frame. Instead, get this information from the Shader and advance it properly depending on the set shader.
+X CBV heap is currently advanced by 33 slots each frame. Instead, get this information from the Shader and advance it properly depending on the set shader.
 * d3d12 renderer should not be dependent on shader_system. I think?
 * Is BeginPass actually BeginDrawCall and DrawCall -> SubmitDrawCall. Maybe?
 * Move BufferWithNamedOffsets to separate file or sumth

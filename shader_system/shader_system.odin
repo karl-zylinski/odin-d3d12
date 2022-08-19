@@ -294,7 +294,7 @@ load_shader :: proc(path: string) -> Shader {
         }
 
         if len(shader.textures_2d) > 0 {
-            strings.write_string(&generated, "Texture2D bindless_textures[32] : register(t0, space1);\n\n")
+            strings.write_string(&generated, "Texture2D bindless_textures[] : register(t0, space1);\n\n")
 
             strings.write_string(&generated, "struct IndexTextures {\n")
             
@@ -341,7 +341,16 @@ free_shader :: proc(s: ^Shader) {
         delete(cb.name)
     }
 
+    for vi in s.vertex_inputs {
+        delete(vi.name)
+    }
+
+    for t in s.textures_2d {
+        delete(t.name)
+    }
+
     delete(s.constant_buffers)
     delete(s.textures_2d)
+    delete(s.vertex_inputs)
     free(s.code)
 }

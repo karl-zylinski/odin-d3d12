@@ -9,6 +9,7 @@ import "vendor:directx/dxc"
 import "core:sys/windows"
 import "core:strings"
 import "core:os"
+import "core:log"
 import rc "../render_commands"
 import rt "../render_types"
 import ss "../shader_system"
@@ -67,11 +68,16 @@ ShaderTexture :: struct {
     name: base.StrHash,
 }
 
+VertexInput :: struct {
+    name: base.StrHash,
+}
+
 Shader :: struct {
     pipeline_state: ^d3d12.IPipelineState,
     root_signature: ^d3d12.IRootSignature,
     constant_buffers: [dynamic]ShaderConstantBuffer,
     textures: [dynamic]ShaderTexture,
+    vertex_inputs: [dynamic]VertexInput,
 }
 
 Texture :: struct {
@@ -124,26 +130,80 @@ State :: struct {
 
     queue: ^d3d12.ICommandQueue,
 
-    dxc_library: ^dxc.IDxcLibrary,
-    mjau: [1234]u32,
-    dxc_compiler: ^dxc.IDxcCompiler,
+    dxc_library: ^dxc.ILibrary,
+    dxc_compiler: ^dxc.ICompiler,
 }
 
-get_cbv_handle :: proc(s: ^State, offset: int) -> d3d12.CPU_DESCRIPTOR_HANDLE {
-    cbv_handle: d3d12.CPU_DESCRIPTOR_HANDLE
-
-    start := s.cbv_heap_start
-    diff := start + offset - CBV_HEAP_SIZE
-
-    if diff >= 0 {
-        start = diff
-    } else {
-        start += offset
+get_constant_buffer_handle :: proc(s: ^State, shader: ^Shader) -> Maybe(d3d12.CPU_DESCRIPTOR_HANDLE) {
+    if len(shader.constant_buffers) == 0 {
+        return nil
     }
 
-    s.cbv_heap->GetCPUDescriptorHandleForHeapStart(&cbv_handle)
-    cbv_handle.ptr += uint(s.device->GetDescriptorHandleIncrementSize(.CBV_SRV_UAV) * u32(start))
-    return cbv_handle
+    handle_index := s.cbv_heap_start
+
+    if handle_index == CBV_HEAP_SIZE - 1 {
+        handle_index = 0
+    }
+
+    handle: d3d12.CPU_DESCRIPTOR_HANDLE
+    s.cbv_heap->GetCPUDescriptorHandleForHeapStart(&handle)
+    handle.ptr += uint(s.device->GetDescriptorHandleIncrementSize(.CBV_SRV_UAV) * u32(handle_index))
+    return handle
+}
+
+get_texture_handle :: proc(s: ^State, shader: ^Shader, name: base.StrHash) -> Maybe(d3d12.CPU_DESCRIPTOR_HANDLE) {
+    if len(shader.textures) == 0 {
+        return nil
+    }
+
+    handle_index := s.cbv_heap_start + (len(shader.constant_buffers) > 0 ? 1 : 0)
+    found := false
+
+    for t in shader.textures {
+        if t.name == name {
+            found = true
+            break
+        }
+
+        handle_index += 1
+    }
+
+    if found == false {
+        return nil
+    }
+
+    diff := handle_index - CBV_HEAP_SIZE
+
+    if diff >= 0 {
+        handle_index = diff
+    }
+
+    handle: d3d12.CPU_DESCRIPTOR_HANDLE
+    s.cbv_heap->GetCPUDescriptorHandleForHeapStart(&handle)
+    handle.ptr += uint(s.device->GetDescriptorHandleIncrementSize(.CBV_SRV_UAV) * u32(handle_index))
+    return handle
+}
+
+get_vertex_buffer_handle :: proc(s: ^State, shader: ^Shader) -> Maybe(d3d12.CPU_DESCRIPTOR_HANDLE) {
+    if len(shader.vertex_inputs) == 0 {
+        return nil
+    }
+
+    handle_index := s.cbv_heap_start + (len(shader.constant_buffers) > 0 ? 1 : 0) + len(shader.textures)
+    diff := handle_index - CBV_HEAP_SIZE
+
+    if diff >= 0 {
+        handle_index = diff
+    }
+
+    handle: d3d12.CPU_DESCRIPTOR_HANDLE
+    s.cbv_heap->GetCPUDescriptorHandleForHeapStart(&handle)
+    handle.ptr += uint(s.device->GetDescriptorHandleIncrementSize(.CBV_SRV_UAV) * u32(handle_index))
+    return handle
+}
+
+get_total_number_of_handles :: proc(shader: ^Shader) -> int {
+    return (len(shader.constant_buffers) > 0 ? 1 : 0) + len(shader.textures) + (len(shader.vertex_inputs) > 0 ? 1 : 0)
 }
 
 next_rtv_handle :: proc(s: ^State) -> d3d12.CPU_DESCRIPTOR_HANDLE {
@@ -276,9 +336,9 @@ create :: proc(wx: i32, wy: i32, window_handle: dxgi.HWND) -> (s: State) {
 
     // DXC
     {
-        hr = dxc.CreateInstance(dxc.CLSID_DxcLibrary, dxc.IDxcLibrary_UUID, (^rawptr)(&s.dxc_library))
+        hr = dxc.CreateInstance(dxc.CLSID_Library, dxc.ILibrary_UUID, (^rawptr)(&s.dxc_library))
         check(hr, s.info_queue, "Failed to create DXC library")
-        hr = dxc.CreateInstance(dxc.CLSID_DxcCompiler, dxc.IDxcCompiler_UUID, (^rawptr)(&s.dxc_compiler))
+        hr = dxc.CreateInstance(dxc.CLSID_Compiler, dxc.ICompiler_UUID, (^rawptr)(&s.dxc_compiler))
         check(hr, s.info_queue, "Failed to create DXC compiler")
     }
 
@@ -340,6 +400,7 @@ destroy_resource :: proc(s: ^State, handle: rt.Handle) {
             r.root_signature->Release()
             delete(r.constant_buffers)
             delete(r.textures)
+            delete(r.vertex_inputs)
             res^ = Resource{}
         }
         case Pipeline: {
@@ -379,19 +440,34 @@ constant_buffer_type_size :: proc(t: ss.ShaderType) -> int {
     return 0
 }
 
-ensure_cmdlist :: proc(cmdlist: ^d3d12.IGraphicsCommandList) -> bool {
-    if cmdlist == nil {
-        fmt.println("Trying to issue rendering command without BeginPass command being run first")
-        return false
+ensure_cmdlist :: proc(cmdlist: Maybe(^d3d12.IGraphicsCommandList)) -> bool {
+    c, ok := cmdlist.?
+
+    if ok {
+        return true
     }
 
-    return true
+    fmt.println("Trying to issue rendering command without BeginPass command being run first")
+    return false
+}
+
+maybe_assert :: proc(m: Maybe($T), sfmt: string, args: ..any, loc := #caller_location) -> (T, bool) {
+    v, ok := m.?
+    fmt.assertf(condition=ok, fmt=sfmt, args=args, loc=loc)
+    return v, ok
+}
+
+cmdlist_assert :: proc(m: Maybe($T), loc := #caller_location) -> (T, bool) {
+    v, ok := m.?
+    fmt.assertf(condition=ok, fmt="Trying to issue rendering command without BeginPass command being run first", loc=loc, args={})
+    return v, ok
 }
 
 submit_command_list :: proc(s: ^State, commandlist: ^rc.CommandList) {
     hr: d3d12.HRESULT
 
-    cmdlist: ^d3d12.IGraphicsCommandList
+    current_cmdlist: Maybe(^d3d12.IGraphicsCommandList)
+    current_shader: Maybe(^Shader)
 
     for command in &commandlist.commands {
         cmdswitch: switch c in &command {
@@ -400,7 +476,7 @@ submit_command_list :: proc(s: ^State, commandlist: ^rc.CommandList) {
                 destroy_resource(s, c.handle)
             }
             case rc.BeginResourceCreation: {
-                if cmdlist != nil {
+                if current_cmdlist != nil {
                     fmt.println("Trying to run BeginResourceCreation twice, or when BeginPass has already been run!")
                     return
                 }
@@ -411,7 +487,7 @@ submit_command_list :: proc(s: ^State, commandlist: ^rc.CommandList) {
                 hr = s.resource_cmdlist->Reset(s.resource_cmdallocator, nil)
                 check(hr, s.info_queue, "Failed to reset command list")
 
-                cmdlist = s.resource_cmdlist
+                current_cmdlist = s.resource_cmdlist
             }
             case rc.BeginPass: {
                 if p, ok := &s.resources[c.pipeline].resource.(Pipeline); ok {
@@ -429,51 +505,23 @@ submit_command_list :: proc(s: ^State, commandlist: ^rc.CommandList) {
                     hr = bs.cmdlist->Reset(bs.cmdallocator, nil)
                     check(hr, s.info_queue, "Failed to reset command list")
 
-                    cmdlist = bs.cmdlist
-                    cmdlist->SetDescriptorHeaps(1, &s.cbv_heap);
-                }
-            }
-            case rc.SetBuffer: {
-                if shader, ok := &s.resources[c.shader].resource.(Shader); ok {
-                    if b, ok := &s.resources[c.buffer].resource.(Buffer); ok {
-                        res_handle := get_cbv_handle(s, 33)
-
-                        texture_srv_desc := d3d12.SHADER_RESOURCE_VIEW_DESC {
-                            Format = .R32_TYPELESS,
-                            ViewDimension = .BUFFER,
-                                    Shader4ComponentMapping = 5768,
-                        }
-
-                        texture_srv_desc.Buffer = {
-                            NumElements = u32(b.size) / 4,
-                        }
-
-                        texture_srv_desc.Buffer.Flags = .RAW
-
-
-                        s.device->CreateShaderResourceView(b.buffer, &texture_srv_desc, res_handle)
-                        break;
-                    }
+                    bs.cmdlist->SetDescriptorHeaps(1, &s.cbv_heap);
+                    current_cmdlist = bs.cmdlist
                 }
             }
             case rc.SetTexture: {
-                if shader, ok := &s.resources[c.shader].resource.(Shader); ok {
+                if shader, ok := maybe_assert(current_shader, "Shader not set"); ok {
                     if t, ok := &s.resources[c.texture].resource.(Texture); ok {
-                       for st, arr_idx in &shader.textures {
-                            if st.name == c.name {
-                                res_handle := get_cbv_handle(s, (1 + arr_idx))
-
-                                texture_srv_desc := d3d12.SHADER_RESOURCE_VIEW_DESC {
-                                    Format = t.desc.Format,
-                                    ViewDimension = .TEXTURE2D,
-                                    Shader4ComponentMapping = 5768,
-                                }
-
-                                texture_srv_desc.Texture2D.MipLevels = 1
-
-                                s.device->CreateShaderResourceView(t.res, &texture_srv_desc, res_handle)
-                                break;
+                        if handle, ok := get_texture_handle(s, shader, c.name).?; ok {
+                            texture_srv_desc := d3d12.SHADER_RESOURCE_VIEW_DESC {
+                                Format = t.desc.Format,
+                                ViewDimension = .TEXTURE2D,
+                                Shader4ComponentMapping = 5768,
                             }
+
+                            texture_srv_desc.Texture2D.MipLevels = 1
+
+                            s.device->CreateShaderResourceView(t.res, &texture_srv_desc, handle)
                         }
                     }
                 }
@@ -532,51 +580,49 @@ submit_command_list :: proc(s: ^State, commandlist: ^rc.CommandList) {
 
                 s.device->GetCopyableFootprints(&texture_desc, 0, 1, 0, &copy_location.PlacedFootprint, nil, nil, nil);
 
-                if !ensure_cmdlist(cmdlist) {
-                    break
+                if cmdlist, ok := cmdlist_assert(current_cmdlist); ok {
+                    cmdlist->CopyTextureRegion(
+                            &d3d12.TEXTURE_COPY_LOCATION { pResource = t.res },
+                            0, 0, 0, 
+                            &copy_location,
+                            nil)
+
+                    b := d3d12.RESOURCE_BARRIER {
+                        Type = .TRANSITION,
+                        Flags = .NONE,
+                    }
+
+                    b.Transition = {
+                        pResource = t.res,
+                        StateBefore = .COPY_DEST,
+                        StateAfter = .PIXEL_SHADER_RESOURCE,
+                        Subresource = d3d12.RESOURCE_BARRIER_ALL_SUBRESOURCES,
+                    }
+
+                    cmdlist->ResourceBarrier(1, &b);
+
+                    set_resource(s, c.handle, t)
                 }
-
-                cmdlist->CopyTextureRegion(
-                        &d3d12.TEXTURE_COPY_LOCATION { pResource = t.res },
-                        0, 0, 0, 
-                        &copy_location,
-                        nil)
-
-                b := d3d12.RESOURCE_BARRIER {
-                    Type = .TRANSITION,
-                    Flags = .NONE,
-                }
-
-                b.Transition = {
-                    pResource = t.res,
-                    StateBefore = .COPY_DEST,
-                    StateAfter = .PIXEL_SHADER_RESOURCE,
-                    Subresource = d3d12.RESOURCE_BARRIER_ALL_SUBRESOURCES,
-                }
-
-                cmdlist->ResourceBarrier(1, &b);
-
-                set_resource(s, c.handle, t)
 
                 free(c.data)
             }
             case rc.SetConstantBuffer: {
-                if b, ok := &s.resources[c.handle].resource.(Buffer); ok {
-                    constant_buffer_desc := d3d12.CONSTANT_BUFFER_VIEW_DESC {
-                        SizeInBytes = u32(b.size),
-                        BufferLocation = b.buffer->GetGPUVirtualAddress(),
-                    }
+                if shader, ok := maybe_assert(current_shader, "Shader not set"); ok {
+                    if b, ok := &s.resources[c.handle].resource.(Buffer); ok {
+                        constant_buffer_desc := d3d12.CONSTANT_BUFFER_VIEW_DESC {
+                            SizeInBytes = u32(b.size),
+                            BufferLocation = b.buffer->GetGPUVirtualAddress(),
+                        }
 
-                    s.device->CreateConstantBufferView(&constant_buffer_desc, get_cbv_handle(s, c.offset))
+                        if cb_handle, ok := get_constant_buffer_handle(s, shader).?; ok {
+                            s.device->CreateConstantBufferView(&constant_buffer_desc, cb_handle)    
+                        }
+                    }
                 }
             }
             case rc.SetShader: {
                 if shader, ok := &s.resources[c.handle].resource.(Shader); ok {
-                    if p, ok := &s.resources[c.pipeline].resource.(Pipeline); ok {
-                        if !ensure_cmdlist(cmdlist) {
-                            break
-                        }
-
+                    if cmdlist, ok := cmdlist_assert(current_cmdlist); ok {
                         cmdlist->SetGraphicsRootSignature(shader.root_signature)
                         table_handle: d3d12.GPU_DESCRIPTOR_HANDLE
                         s.cbv_heap->GetGPUDescriptorHandleForHeapStart(&table_handle)
@@ -585,19 +631,19 @@ submit_command_list :: proc(s: ^State, commandlist: ^rc.CommandList) {
 
                         cmdlist->SetGraphicsRootDescriptorTable(0, table_handle)
                         cmdlist->SetPipelineState(shader.pipeline_state)
+
+                        current_shader = shader
                     }
                 }
             }
             case rc.SetConstant: {
-                if !ensure_cmdlist(cmdlist) {
-                    break cmdswitch
-                }
-
-                if shader, ok := &s.resources[c.shader].resource.(Shader); ok {
-                    for cb, arr_idx in &shader.constant_buffers {
-                        if cb.name == c.name {
-                            cmdlist->SetGraphicsRoot32BitConstants(1, 1, &c.offset, u32(arr_idx))
-                            break;
+                if cmdlist, ok := cmdlist_assert(current_cmdlist); ok {
+                    if shader, ok := maybe_assert(current_shader, "Shader not set"); ok {
+                        for cb, arr_idx in &shader.constant_buffers {
+                            if cb.name == c.name {
+                                cmdlist->SetGraphicsRoot32BitConstants(1, 1, &c.offset, u32(arr_idx))
+                                break;
+                            }
                         }
                     }
                 }
@@ -699,19 +745,19 @@ submit_command_list :: proc(s: ^State, commandlist: ^rc.CommandList) {
                 vs: ^d3d12.IBlob = nil
                 ps: ^d3d12.IBlob = nil
 
-                vs_compiled: ^dxc.IDxcBlob
-                ps_compiled: ^dxc.IDxcBlob
+                vs_compiled: ^dxc.IBlob
+                ps_compiled: ^dxc.IBlob
 
                 def := c.shader
 
                 {
-                    source_blob: ^dxc.IDxcBlobEncoding
+                    source_blob: ^dxc.IBlobEncoding
                     hr = s.dxc_library->CreateBlobWithEncodingOnHeapCopy(def.code, u32(def.code_size), dxc.CP_UTF8, &source_blob)
                     check(hr, s.info_queue, "Failed creating shader blob")
 
-                    errors: ^dxc.IDxcBlobEncoding
+                    errors: ^dxc.IBlobEncoding
 
-                    vs_res: ^dxc.IDxcOperationResult
+                    vs_res: ^dxc.IOperationResult
                     hr = s.dxc_compiler->Compile(source_blob, windows.utf8_to_wstring("shader.shader"), windows.utf8_to_wstring("vertex_shader"), windows.utf8_to_wstring("vs_6_2"), nil, 0, nil, 0, nil, &vs_res)
                     check(hr, s.info_queue, "Failed compiling vertex shader")
                     vs_res->GetResult(&vs_compiled)
@@ -726,7 +772,7 @@ submit_command_list :: proc(s: ^State, commandlist: ^rc.CommandList) {
                         fmt.println(error_str)
                     }
 
-                    ps_res: ^dxc.IDxcOperationResult
+                    ps_res: ^dxc.IOperationResult
                     hr = s.dxc_compiler->Compile(source_blob, windows.utf8_to_wstring("shader.shader"), windows.utf8_to_wstring("pixel_shader"), windows.utf8_to_wstring("ps_6_2"), nil, 0, nil, 0, nil, &ps_res)
                     check(hr, s.info_queue, "Failed compiling pixel shader")
                     ps_res->GetResult(&ps_compiled)
@@ -777,34 +823,46 @@ submit_command_list :: proc(s: ^State, commandlist: ^rc.CommandList) {
                     append(&rd.textures, ShaderTexture { name = base.hash(t.name) })
                 }
 
+                for s in def.vertex_inputs {
+                    append(&rd.vertex_inputs, VertexInput { name = base.hash(s.name) })   
+                }
+
+                total_num_handles := get_total_number_of_handles(&rd) 
+                if total_num_handles > (CBV_HEAP_SIZE / NUM_RENDERTARGETS) {
+                    fmt.printf("Shader uses too many handles, wants: %v. Avaiable: %v (calculated using %v/NUM_RENDERTARGETS, where NUM_RENDERTARGETS is %v)\n", total_num_handles, CBV_HEAP_SIZE/NUM_RENDERTARGETS, CBV_HEAP_SIZE, NUM_RENDERTARGETS)
+                }
+
                 {
-                    descriptor_table_ranges: []d3d12.DESCRIPTOR_RANGE = {
-                        // Constant buffer blob
-                        {
+                    descriptor_table_ranges := make([dynamic]d3d12.DESCRIPTOR_RANGE, context.temp_allocator)
+
+                    if len(def.constant_buffers) > 0 {
+                        append(&descriptor_table_ranges, d3d12.DESCRIPTOR_RANGE {
                             RangeType = .SRV,
                             NumDescriptors = 1,
                             BaseShaderRegister = 0,
                             RegisterSpace = 0,
                             OffsetInDescriptorsFromTableStart = d3d12.DESCRIPTOR_RANGE_OFFSET_APPEND,
-                        },
+                        })
+                    }
 
-                        // 32 textures
-                        {
+                    if len(def.textures_2d) > 0 {
+                        append(&descriptor_table_ranges, d3d12.DESCRIPTOR_RANGE {
                             RangeType = .SRV,
-                            NumDescriptors = 32,
+                            NumDescriptors = u32(len(def.textures_2d)),
                             BaseShaderRegister = 0,
                             RegisterSpace = 1,
                             OffsetInDescriptorsFromTableStart = d3d12.DESCRIPTOR_RANGE_OFFSET_APPEND,
-                        },
+                        })
+                    }
 
-                        // Vertex buffer
-                        {
+                    if len(def.vertex_inputs) > 0 {
+                        append(&descriptor_table_ranges, d3d12.DESCRIPTOR_RANGE {
                             RangeType = .SRV,
                             NumDescriptors = 1,
                             BaseShaderRegister = 0,
                             RegisterSpace = 2,
                             OffsetInDescriptorsFromTableStart = d3d12.DESCRIPTOR_RANGE_OFFSET_APPEND,
-                        },
+                        })
                     }
 
                     descriptor_table: d3d12.ROOT_DESCRIPTOR_TABLE = {
@@ -1021,7 +1079,7 @@ submit_command_list :: proc(s: ^State, commandlist: ^rc.CommandList) {
                 hr = s.device->CreateCommittedResource(&d3d12.HEAP_PROPERTIES{ Type = .DEFAULT }, .NONE, &resource_desc, .COPY_DEST, nil, d3d12.IResource_UUID, (^rawptr)(&rd.buffer))
                 check(hr, s.info_queue, "Failed buffer")
 
-                if upload_res != nil {
+                if cmdlist, ok := cmdlist_assert(current_cmdlist); ok && upload_res != nil {
                     cmdlist->CopyBufferRegion(rd.buffer, 0, upload_res, 0, u64(c.data_size))
                 }
 
@@ -1072,192 +1130,195 @@ submit_command_list :: proc(s: ^State, commandlist: ^rc.CommandList) {
                         upload_res->Unmap(0, nil)
                     }
 
-                    cmdlist->CopyBufferRegion(b.buffer, 0, upload_res, 0, u64(c.size))
+
+                    if cmdlist, ok := cmdlist_assert(current_cmdlist); ok {
+                        cmdlist->CopyBufferRegion(b.buffer, 0, upload_res, 0, u64(c.size))
+                    }
+
                     free(c.data)
                 }
             }
 
             case rc.SetScissor: {
-                if !ensure_cmdlist(cmdlist) {
-                    break
+                if cmdlist, ok := cmdlist_assert(current_cmdlist); ok {
+                    cmdlist->RSSetScissorRects(1, &{
+                        left = i32(c.rect.x),
+                        top = i32(c.rect.y),
+                        right = i32(c.rect.x + c.rect.w),
+                        bottom = i32(c.rect.y + c.rect.h),
+                    })
                 }
-
-                cmdlist->RSSetScissorRects(1, &{
-                    left = i32(c.rect.x),
-                    top = i32(c.rect.y),
-                    right = i32(c.rect.x + c.rect.w),
-                    bottom = i32(c.rect.y + c.rect.h),
-                })
             }
 
             case rc.SetViewport: {
-                if !ensure_cmdlist(cmdlist) {
-                    break
+                if cmdlist, ok := cmdlist_assert(current_cmdlist); ok {
+                    cmdlist->RSSetViewports(1, &{
+                        TopLeftX = c.rect.x,
+                        TopLeftY = c.rect.y,
+                        Width = c.rect.w,
+                        Height = c.rect.h,
+                        MinDepth = 0,
+                        MaxDepth = 1,
+                    })
                 }
-
-                cmdlist->RSSetViewports(1, &{
-                    TopLeftX = c.rect.x,
-                    TopLeftY = c.rect.y,
-                    Width = c.rect.w,
-                    Height = c.rect.h,
-                    MinDepth = 0,
-                    MaxDepth = 1,
-                })
             }
 
             case rc.SetRenderTarget: {
-                if !ensure_cmdlist(cmdlist) {
-                    break
-                }
+                if cmdlist, ok := cmdlist_assert(current_cmdlist); ok {
+                    rt: ^d3d12.IResource
+                    depth: ^d3d12.IResource
 
-                rt: ^d3d12.IResource
-                depth: ^d3d12.IResource
+                    if p, ok := &s.resources[c.resource].resource.(Pipeline); ok {
+                        frame_index := p->swapchain->GetCurrentBackBufferIndex()   
+                        rt = p.backbuffer_states[frame_index].render_target
+                        depth = p.depth
+                    }
 
-                if p, ok := &s.resources[c.resource].resource.(Pipeline); ok {
-                    frame_index := p->swapchain->GetCurrentBackBufferIndex()   
-                    rt = p.backbuffer_states[frame_index].render_target
-                    depth = p.depth
-                }
-
-                if !fmt.assertf(rt != nil && depth != nil, "Could not resolve render target for resource %v", c.resource) {
-                    return
-                }
-
-                rtv_handle := next_rtv_handle(s)
-                s.device->CreateRenderTargetView(rt, nil, rtv_handle);
-
-                dsv_handle := next_dsv_handle(s)
-                dsv_desc := d3d12.DEPTH_STENCIL_VIEW_DESC {
-                    Format = .D32_FLOAT,
-                    ViewDimension = .TEXTURE2D,
-                }
-
-                s.device->CreateDepthStencilView(depth, &dsv_desc, dsv_handle);
-                cmdlist->OMSetRenderTargets(1, &rtv_handle, false, &dsv_handle)
-            }
-
-            case rc.ClearRenderTarget: 
-                if p, ok := &s.resources[c.resource].resource.(Pipeline); ok {
-                    if !ensure_cmdlist(cmdlist) {
-                        break
+                    if !fmt.assertf(rt != nil && depth != nil, "Could not resolve render target for resource %v", c.resource) {
+                        return
                     }
 
                     rtv_handle := next_rtv_handle(s)
-                    frame_index := p->swapchain->GetCurrentBackBufferIndex()
-                    rt := p.backbuffer_states[frame_index].render_target
                     s.device->CreateRenderTargetView(rt, nil, rtv_handle);
-                    cmdlist->ClearRenderTargetView(rtv_handle, (^[4]f32)(&c.clear_color), 0, nil)
-                    
+
                     dsv_handle := next_dsv_handle(s)
                     dsv_desc := d3d12.DEPTH_STENCIL_VIEW_DESC {
                         Format = .D32_FLOAT,
                         ViewDimension = .TEXTURE2D,
                     }
 
-                    s.device->CreateDepthStencilView(p.depth, &dsv_desc, dsv_handle);
-                    cmdlist->ClearDepthStencilView(dsv_handle, .DEPTH, 1.0, 0, 0, nil);
+                    s.device->CreateDepthStencilView(depth, &dsv_desc, dsv_handle)
+                    cmdlist->OMSetRenderTargets(1, &rtv_handle, false, &dsv_handle)
+                }
+            }
+
+            case rc.ClearRenderTarget: 
+                if p, ok := &s.resources[c.resource].resource.(Pipeline); ok {
+                    if cmdlist, ok := cmdlist_assert(current_cmdlist); ok {
+                        rtv_handle := next_rtv_handle(s)
+                        frame_index := p->swapchain->GetCurrentBackBufferIndex()
+                        rt := p.backbuffer_states[frame_index].render_target
+                        s.device->CreateRenderTargetView(rt, nil, rtv_handle)
+                        cmdlist->ClearRenderTargetView(rtv_handle, (^[4]f32)(&c.clear_color), 0, nil)
+                        
+                        dsv_handle := next_dsv_handle(s)
+                        dsv_desc := d3d12.DEPTH_STENCIL_VIEW_DESC {
+                            Format = .D32_FLOAT,
+                            ViewDimension = .TEXTURE2D,
+                        }
+
+                        s.device->CreateDepthStencilView(p.depth, &dsv_desc, dsv_handle)
+                        cmdlist->ClearDepthStencilView(dsv_handle, .DEPTH, 1.0, 0, 0, nil);
+                    }
                 }
 
             case rc.DrawCall: {
-                if !ensure_cmdlist(cmdlist) {
-                    break
-                }
+                if cmdlist, ok := cmdlist_assert(current_cmdlist); ok {
+                    ib_view: d3d12.INDEX_BUFFER_VIEW
 
-            //    vb_view: d3d12.VERTEX_BUFFER_VIEW
-                ib_view: d3d12.INDEX_BUFFER_VIEW
-              /*  if b, ok := &s.resources[c.vertex_buffer].resource.(Buffer); ok {
-                    vb_view = {
-                        BufferLocation = b.buffer->GetGPUVirtualAddress(),
-                        StrideInBytes = u32(b.stride),
-                        SizeInBytes = u32(b.size),
+                    if b, ok := &s.resources[c.index_buffer].resource.(Buffer); ok {
+                        ib_view = {
+                            BufferLocation = b.buffer->GetGPUVirtualAddress(),
+                            Format = .R32_UINT,
+                            SizeInBytes = u32(b.size),
+                        }
                     }
-                }*/
 
-                if b, ok := &s.resources[c.index_buffer].resource.(Buffer); ok {
-                    ib_view = {
-                        BufferLocation = b.buffer->GetGPUVirtualAddress(),
-                        Format = .R32_UINT,
-                        SizeInBytes = u32(b.size),
+                    if shader, ok := maybe_assert(current_shader, "Shader not set"); ok {
+                        if b, ok := &s.resources[c.vertex_buffer].resource.(Buffer); ok {
+                            if handle, ok := get_vertex_buffer_handle(s, shader).?; ok {
+                                texture_srv_desc := d3d12.SHADER_RESOURCE_VIEW_DESC {
+                                    Format = .R32_TYPELESS,
+                                    ViewDimension = .BUFFER,
+                                    Shader4ComponentMapping = 5768,
+                                }
+
+                                texture_srv_desc.Buffer = {
+                                    NumElements = u32(b.size) / 4,
+                                }
+
+                                texture_srv_desc.Buffer.Flags = .RAW
+                                s.device->CreateShaderResourceView(b.buffer, &texture_srv_desc, handle)
+                            }
+                        }
                     }
-                }
 
-                num_indices := ib_view.SizeInBytes / 4
-                cmdlist->IASetPrimitiveTopology(.TRIANGLELIST)
-            //    cmdlist->IASetVertexBuffers(0, 1, &vb_view)
-                cmdlist->IASetIndexBuffer(&ib_view)
-                cmdlist->DrawIndexedInstanced(num_indices, 1, 0, 0, 0)
+                    num_indices := ib_view.SizeInBytes / 4
+                    cmdlist->IASetPrimitiveTopology(.TRIANGLELIST)
+                    cmdlist->IASetIndexBuffer(&ib_view)
+                    cmdlist->DrawIndexedInstanced(num_indices, 1, 0, 0, 0)
+                }
             }
 
             case rc.ResourceTransition: {
-                if !ensure_cmdlist(cmdlist) {
-                    break
-                }
+                if cmdlist, ok := cmdlist_assert(current_cmdlist); ok {
+                    res: ^d3d12.IResource
+                    before := ri_to_d3d_state(c.before)
+                    after := ri_to_d3d_state(c.after)
 
-                res: ^d3d12.IResource
-                before := ri_to_d3d_state(c.before)
-                after := ri_to_d3d_state(c.after)
-
-                #partial switch r in &s.resources[c.resource].resource {
-                    case Pipeline: {
-                        frame_index := r->swapchain->GetCurrentBackBufferIndex()
-                        res = r.backbuffer_states[frame_index].render_target
-                    }
-                    case Buffer: {
-                        if !fmt.assertf(r.state == before, "Resource not in before-state %v", before) {
+                    #partial switch r in &s.resources[c.resource].resource {
+                        case Pipeline: {
+                            frame_index := r->swapchain->GetCurrentBackBufferIndex()
+                            res = r.backbuffer_states[frame_index].render_target
+                        }
+                        case Buffer: {
+                            if !fmt.assertf(r.state == before, "Resource not in before-state %v", before) {
+                                return
+                            }
+                            res = r.buffer
+                            r.state = after
+                        }
+                        case: {
+                            fmt.printf("ResourceTransition not implemented for type %v", r)
                             return
                         }
-                        res = r.buffer
-                        r.state = after
-                    }
-                    case: {
-                        fmt.printf("ResourceTransition not implemented for type %v", r)
-                        return
-                    }
-                }
-
-                if res != nil {
-                    b := d3d12.RESOURCE_BARRIER {
-                        Type = .TRANSITION,
-                        Flags = .NONE,
                     }
 
-                    b.Transition = {
-                        pResource = res,
-                        StateBefore = before,
-                        StateAfter = after,
-                        Subresource = d3d12.RESOURCE_BARRIER_ALL_SUBRESOURCES,
-                    }
+                    if res != nil {
+                        b := d3d12.RESOURCE_BARRIER {
+                            Type = .TRANSITION,
+                            Flags = .NONE,
+                        }
 
-                    cmdlist->ResourceBarrier(1, &b);
+                        b.Transition = {
+                            pResource = res,
+                            StateBefore = before,
+                            StateAfter = after,
+                            Subresource = d3d12.RESOURCE_BARRIER_ALL_SUBRESOURCES,
+                        }
+
+                        cmdlist->ResourceBarrier(1, &b);
+                    }
                 }
             }
 
             case rc.Execute: {
-                if !ensure_cmdlist(cmdlist) {
-                    break
+                if cmdlist, ok := cmdlist_assert(current_cmdlist); ok {
+                    hr = cmdlist->Close()
+                    check(hr, s.info_queue, "Failed to close command list")
+                    cmdlists := [?]^d3d12.IGraphicsCommandList { cmdlist }
+                    s.queue->ExecuteCommandLists(len(cmdlists), (^^d3d12.ICommandList)(&cmdlists[0]))
                 }
-
-                hr = cmdlist->Close()
-                check(hr, s.info_queue, "Failed to close command list")
-                cmdlists := [?]^d3d12.IGraphicsCommandList { cmdlist }
-                s.queue->ExecuteCommandLists(len(cmdlists), (^^d3d12.ICommandList)(&cmdlists[0]))
             }
             
             case rc.Present:
-                if p, ok := &s.resources[c.handle].resource.(Pipeline); ok {
-                    flags: u32
-                    params: dxgi.PRESENT_PARAMETERS
-                    frame_index := p->swapchain->GetCurrentBackBufferIndex()
-                    hr = p->swapchain->Present1(1, flags, &params)
-                    check(hr, s.info_queue, "Present failed")
-                    p.num_backbuffer_presents += 1
-                    s.queue->Signal(p.backbuffer_fence, p.num_backbuffer_presents)
-                    p.backbuffer_states[frame_index].fence_val = p.num_backbuffer_presents 
+                if shader, ok := maybe_assert(current_shader, "Shader not set"); ok {
+                    if p, ok := &s.resources[c.handle].resource.(Pipeline); ok {
+                        flags: u32
+                        params: dxgi.PRESENT_PARAMETERS
+                        frame_index := p->swapchain->GetCurrentBackBufferIndex()
+                        hr = p->swapchain->Present1(1, flags, &params)
+                        check(hr, s.info_queue, "Present failed")
+                        p.num_backbuffer_presents += 1
+                        s.queue->Signal(p.backbuffer_fence, p.num_backbuffer_presents)
+                        p.backbuffer_states[frame_index].fence_val = p.num_backbuffer_presents 
+                        tot_cb_handles := get_total_number_of_handles(shader)
 
-                    s.cbv_heap_start += 34
-
-                    if s.cbv_heap_start > CBV_HEAP_SIZE {
-                        s.cbv_heap_start = 0
+                        if (s.cbv_heap_start + tot_cb_handles) >= CBV_HEAP_SIZE {
+                            s.cbv_heap_start = 0
+                        } else {
+                            s.cbv_heap_start += tot_cb_handles
+                        }
                     }
                 }
         }

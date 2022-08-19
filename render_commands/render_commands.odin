@@ -10,7 +10,10 @@ import "../base"
 
 // Public types
 
-Handle :: render_types.Handle
+Handle :: union {
+    TextureHandle,
+    render_types.Handle,
+} 
 
 State :: struct {
     max_handle: Handle,
@@ -117,15 +120,16 @@ set_constant_buffer :: proc(cmdlist: ^CommandList, handle: Handle, offset: int) 
     })
 }
 
-set_constant :: proc(cmdlist: ^CommandList, shader: Handle, name: base.StrHash, offset: int) {
+set_constant :: proc(cmdlist: ^CommandList, name: base.StrHash, offset: int) {
     append(&cmdlist.commands, SetConstant {
-        shader = shader,
         name = name,
         offset = offset,
     })
 }
 
-create_texture :: proc(cmdlist: ^CommandList, format: render_types.TextureFormat, width: int, height: int, data: rawptr) -> Handle {
+TextureHandle :: distinct render_types.Handle
+
+create_texture :: proc(cmdlist: ^CommandList, format: render_types.TextureFormat, width: int, height: int, data: rawptr) -> TextureHandle {
     h := get_handle(cmdlist.state)
 
     tx_size := render_types.texture_size(format, width, height)
@@ -143,19 +147,10 @@ create_texture :: proc(cmdlist: ^CommandList, format: render_types.TextureFormat
     return h
 }
 
-set_texture :: proc(cmdlist: ^CommandList, shader: Handle, name: base.StrHash, texture: Handle) {
+set_texture :: proc(cmdlist: ^CommandList, name: base.StrHash, texture: TextureHandle) {
     append(&cmdlist.commands, SetTexture {
-        shader = shader,
         name = name,
         texture = texture,
-    }) 
-}
-
-set_buffer :: proc(cmdlist: ^CommandList, shader: Handle, name: base.StrHash, buffer: Handle) {
-    append(&cmdlist.commands, SetBuffer {
-        shader = shader,
-        name = name,
-        buffer = buffer,
     }) 
 }
 
@@ -184,10 +179,9 @@ destroy_command_list :: proc(cmdlist: ^CommandList) {
     delete(cmdlist.commands)
 }
 
-set_shader :: proc(cmdlist: ^CommandList, pipeline: Handle, shader: Handle) {
+set_shader :: proc(cmdlist: ^CommandList, shader: Handle) {
     append(&cmdlist.commands, SetShader {
         handle = shader,
-        pipeline = pipeline,
     })
 }
 
@@ -309,7 +303,6 @@ CreateShader :: struct {
 
 SetShader :: struct {
     handle: Handle,
-    pipeline: Handle,
 }
 
 DestroyResource :: struct {
@@ -317,7 +310,6 @@ DestroyResource :: struct {
 }
 
 SetConstant :: struct {
-    shader: Handle,
     name: base.StrHash,
     offset: int,
 }
@@ -331,15 +323,8 @@ CreateTexture :: struct {
 }
 
 SetTexture :: struct {
-    shader: Handle,
     name: base.StrHash,
-    texture: Handle,
-}
-
-SetBuffer :: struct {
-    shader: Handle,
-    name: base.StrHash,
-    buffer: Handle,
+    texture: TextureHandle,
 }
 
 BeginPass :: struct {
@@ -371,7 +356,6 @@ Command :: union {
     SetConstant,
     CreateTexture,
     SetTexture,
-    SetBuffer,
     BeginPass,
     BeginResourceCreation,
     UpdateBuffer,
