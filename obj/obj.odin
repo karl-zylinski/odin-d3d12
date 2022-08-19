@@ -6,7 +6,20 @@ import "core:strconv"
 
 import "ze:math"
 
-load :: proc(filename: string) -> ([dynamic]math.float3, [dynamic]u32, [dynamic]math.float3, [dynamic]u32, [dynamic]math.float2, [dynamic]u32)  {
+Index :: struct {
+    vertex: u32,
+    normal: u32,
+    uv: u32,
+}
+
+Obj :: struct {
+    vertices: [dynamic]math.float3,
+    normals: [dynamic]math.float3,
+    uvs: [dynamic]math.float2,
+    indices: [dynamic]Index,
+}
+
+load :: proc(filename: string) -> Obj  {
     f, err := os.open(filename)
     defer os.close(f)
     fs, _ := os.file_size(f)
@@ -14,12 +27,7 @@ load :: proc(filename: string) -> ([dynamic]math.float3, [dynamic]u32, [dynamic]
     defer delete(source_bytes)
     os.read(f, source_bytes)
     source := strings.string_from_ptr(&source_bytes[0], int(fs))
-    out: [dynamic]math.float3
-    normals_out: [dynamic]math.float3
-    texcoords_out: [dynamic]math.float2
-    indices_out: [dynamic]u32
-    normal_indices_out: [dynamic]u32
-    texcoord_indices_out: [dynamic]u32
+    res: Obj
 
     parse_comment :: proc(source: string, i_in: int) -> int {
         i := i_in
@@ -135,7 +143,7 @@ load :: proc(filename: string) -> ([dynamic]math.float3, [dynamic]u32, [dynamic]
         return i, u32(ii - 1), u32(ti - 1), u32(ni - 1)
     }
 
-    parse_face :: proc(source: string, i_in: int, out: ^[dynamic]u32, normal_indices_out: ^[dynamic]u32, texcoord_indices_out: ^[dynamic]u32) -> int {
+    parse_face :: proc(source: string, i_in: int, out: ^[dynamic]Index) -> int {
         num_slashes := 0
 
         {
@@ -150,20 +158,27 @@ load :: proc(filename: string) -> ([dynamic]math.float3, [dynamic]u32, [dynamic]
         }
 
         i := skip_whitespace(source, i_in + 1)
-        n0, n1, n2, in0, in1, in2, t0, t1, t2: u32
-        i, n0, t0, in0 = parse_face_index(source, i)
-        i = skip_whitespace(source, i)
-        i, n1, t1, in1 = parse_face_index(source, i)
-        i = skip_whitespace(source, i)
-        i, n2, t2, in2 = parse_face_index(source, i)
-        append(out, n0, n1, n2)
 
-        if num_slashes >= 3 {
-            append(normal_indices_out, in0, in1, in2)
+        {
+            new_i, vertex, uv, normal := parse_face_index(source, i)
+            i = new_i
+            append(out, Index { vertex = vertex, normal = normal, uv = uv })
         }
 
-        if num_slashes >= 6 {
-            append(texcoord_indices_out, t0, t1, t2)
+        i = skip_whitespace(source, i)
+
+        {
+            new_i, vertex, uv, normal := parse_face_index(source, i)
+            i = new_i
+            append(out, Index { vertex = vertex, normal = normal, uv = uv })
+        }
+
+        i = skip_whitespace(source, i)
+
+        {
+            new_i, vertex, uv, normal := parse_face_index(source, i)
+            i = new_i
+            append(out, Index { vertex = vertex, normal = normal, uv = uv })
         }
 
         return i
@@ -173,15 +188,15 @@ load :: proc(filename: string) -> ([dynamic]math.float3, [dynamic]u32, [dynamic]
         switch source[i] {
             case '#': i = parse_comment(source, i)
             case 'v': if source[i + 1] == ' ' {
-                i = parse_vertex(source, i + 1, &out)
+                i = parse_vertex(source, i + 1, &res.vertices)
             } else if source[i + 1] == 'n' {
-                i = parse_vertex(source, i + 2, &normals_out)
+                i = parse_vertex(source, i + 2, &res.normals)
             } else if source[i + 1] == 't' {
-                i = parse_texcoord(source, i + 2, &texcoords_out)
+                i = parse_texcoord(source, i + 2, &res.uvs)
             }
-            case 'f': i = parse_face(source, i, &indices_out, &normal_indices_out, &texcoord_indices_out)
+            case 'f': i = parse_face(source, i, &res.indices)
         }
     }
 
-    return out, indices_out, normals_out, normal_indices_out, texcoords_out, texcoord_indices_out
+    return res
 }

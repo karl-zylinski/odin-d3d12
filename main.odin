@@ -26,13 +26,11 @@ Renderable :: struct {
 }
 
 create_renderable :: proc(renderer_state: ^rd3d12.State, rc_state: ^rc.State, filename: string, shader: rc.ShaderHandle) -> (ren: Renderable) {
-    vertices, indices, normals, normal_indices, texcoords, texcoord_indices := obj.load(filename)
-    defer delete(vertices)
-    defer delete(indices)
-    defer delete(normals)
-    defer delete(normal_indices)
-    defer delete(texcoords)
-    defer delete(texcoord_indices)
+    loaded_obj := obj.load(filename)
+    defer delete(loaded_obj.vertices)
+    defer delete(loaded_obj.normals)
+    defer delete(loaded_obj.uvs)
+    defer delete(loaded_obj.indices)
 
     Vertex :: struct {
         position: math.float3,
@@ -40,27 +38,24 @@ create_renderable :: proc(renderer_state: ^rd3d12.State, rc_state: ^rc.State, fi
         uv: math.float2,
     }
 
-    vertex_data := make([]Vertex, len(vertices))
+    vertex_data := make([]Vertex, len(loaded_obj.vertices))
     defer delete(vertex_data)
 
     for vd, i in &vertex_data {
-        vd.position = vertices[i]
+        vd.position = loaded_obj.vertices[i]
     }
 
-    if len(normals) > 0 {
-        for i in 0..<len(normal_indices) {
-            vertex_data[indices[i]].normal = normals[normal_indices[i]]
-        }
-    }
+    indices := make([]u32, len(loaded_obj.indices))
+    defer delete(indices)
 
-    if len(texcoords) > 0 {
-        for i in 0..<len(texcoord_indices) {
-            vertex_data[indices[i]].uv = texcoords[texcoord_indices[i]]
-        }
+    for idx, i in loaded_obj.indices {
+        vertex_data[idx.vertex].normal = loaded_obj.normals[idx.normal]
+        vertex_data[idx.vertex].uv = loaded_obj.uvs[idx.uv]
+        indices[i] = u32(idx.vertex)
     }
 
     vertex_buffer_size := len(vertex_data) * size_of(vertex_data[0])
-    index_buffer_size := len(indices) * size_of(indices[0])
+    index_buffer_size := len(loaded_obj.indices) * size_of(u32)
 
     cmdlist := rc.create_command_list(rc_state)
     rc.begin_resource_creation(&cmdlist)
