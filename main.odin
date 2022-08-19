@@ -1,12 +1,9 @@
-package zg
+package ze
 
 import "core:fmt"
 import "core:mem"
 import "core:slice"
-import "core:strconv"
-import "core:strings"
 import "core:sys/windows"
-import "core:os"
 import "core:runtime"
 import "core:image/png"
 
@@ -19,186 +16,7 @@ import rt "ze:render_types"
 import ss "ze:shader_system"
 import "ze:base"
 import "ze:math"
-
-load_obj_model :: proc(filename: string) -> ([dynamic]math.float3, [dynamic]u32, [dynamic]math.float3, [dynamic]u32, [dynamic]math.float2, [dynamic]u32)  {
-    f, err := os.open(filename)
-    defer os.close(f)
-    fs, _ := os.file_size(f)
-    teapot_bytes := make([]byte, fs)
-    defer delete(teapot_bytes)
-    os.read(f, teapot_bytes)
-    teapot := strings.string_from_ptr(&teapot_bytes[0], int(fs))
-    out: [dynamic]math.float3
-    normals_out: [dynamic]math.float3
-    texcoords_out: [dynamic]math.float2
-    indices_out: [dynamic]u32
-    normal_indices_out: [dynamic]u32
-    texcoord_indices_out: [dynamic]u32
-
-    parse_comment :: proc(teapot: string, i_in: int) -> int {
-        i := i_in
-        for teapot[i] != '\n' {
-            i += 1
-        }
-
-        i += 1
-        return i
-    }
-
-    skip_whitespace :: proc(teapot: string, i_in: int) -> int {
-        i := i_in
-
-        for i < len(teapot) {
-            if teapot[i] != ' ' && teapot[i] != '\t' && teapot[i] != '\n' {
-                return i
-            }
-            i += 1
-        }
-
-        return i
-    }
-
-    parse_number :: proc(teapot: string, i_in: int) -> (int, f32) {
-        i := i_in
-        start := i
-
-        for teapot[i] != ' ' && teapot[i] != '\n' && teapot[i] != '\t' {
-            i += 1
-        }
-
-        num, ok := strconv.parse_f32(teapot[start:i])
-        return i, num
-    }
-
-    parse_vertex :: proc(teapot: string, i_in: int, out: ^[dynamic]math.float3) -> int {
-        i := skip_whitespace(teapot, i_in)
-        n0, n1, n2: f32
-        i, n0 = parse_number(teapot, i)
-        i = skip_whitespace(teapot, i)
-        i, n1 = parse_number(teapot, i)
-        i = skip_whitespace(teapot, i)
-        i, n2 = parse_number(teapot, i)
-        append(out, math.float3 { n0, n1, n2 })
-        return i
-    }
-
-    parse_texcoord :: proc(teapot: string, i_in: int, out: ^[dynamic]math.float2) -> int {
-        i := skip_whitespace(teapot, i_in)
-        n0, n1: f32
-        i, n0 = parse_number(teapot, i)
-        i = skip_whitespace(teapot, i)
-        i, n1 = parse_number(teapot, i)
-
-        // There may be a third coordiante, that we skip for now
-        for teapot[i] != '\n' && teapot[i] != '\r' {
-            i += 1
-        }
-
-        append(out, math.float2 { n0, n1 })
-        return i
-    }
-
-    parse_face_index :: proc(teapot: string, i_in: int) -> (int, u32, u32, u32) {
-        num_slashes := 0
-
-        {
-            slashi := i_in
-            for teapot[slashi] != ' ' && teapot[slashi] != '\n' {
-                if teapot[slashi] == '/' {
-                    num_slashes += 1
-                }
-
-                slashi += 1
-            }
-        }
-
-        i := i_in
-        start := i
-
-        for teapot[i] != '/' {
-            i += 1
-        }
-
-        ii, _ := strconv.parse_int(teapot[start:i])
-        i += 1
-
-        if num_slashes == 0 {
-            return i, u32(ii - 1), 0, 0
-        }
-
-        start = i
-
-        for teapot[i] != '/' && teapot[i] != ' ' && teapot[i] != '\n' && teapot[i] != '\t' {
-            i += 1
-        }
-
-        ti, _ := strconv.parse_int(teapot[start:i])
-        i += 1
-
-        if num_slashes == 1 {
-            return i, u32(ii - 1), u32(ti - 1), 0
-        }
-
-        start = i
-
-        for teapot[i] != ' ' && teapot[i] != '\n' && teapot[i] != '\t' {
-            i += 1
-        }
-
-        ni, _ := strconv.parse_int(teapot[start:i])
-        return i, u32(ii - 1), u32(ti - 1), u32(ni - 1)
-    }
-
-    parse_face :: proc(teapot: string, i_in: int, out: ^[dynamic]u32, normal_indices_out: ^[dynamic]u32, texcoord_indices_out: ^[dynamic]u32) -> int {
-        num_slashes := 0
-
-        {
-            slashi := i_in
-            for teapot[slashi] != '\n' {
-                if teapot[slashi] == '/' {
-                    num_slashes += 1
-                }
-
-                slashi += 1
-            }
-        }
-
-        i := skip_whitespace(teapot, i_in + 1)
-        n0, n1, n2, in0, in1, in2, t0, t1, t2: u32
-        i, n0, t0, in0 = parse_face_index(teapot, i)
-        i = skip_whitespace(teapot, i)
-        i, n1, t1, in1 = parse_face_index(teapot, i)
-        i = skip_whitespace(teapot, i)
-        i, n2, t2, in2 = parse_face_index(teapot, i)
-        append(out, n0, n1, n2)
-
-        if num_slashes >= 3 {
-            append(normal_indices_out, in0, in1, in2)
-        }
-
-        if num_slashes >= 6 {
-            append(texcoord_indices_out, t0, t1, t2)
-        }
-
-        return i
-    }
-
-    for i := 0; i < len(teapot); i += 1 {
-        switch teapot[i] {
-            case '#': i = parse_comment(teapot, i)
-            case 'v': if teapot[i + 1] == ' ' {
-                i = parse_vertex(teapot, i + 1, &out)
-            } else if teapot[i + 1] == 'n' {
-                i = parse_vertex(teapot, i + 2, &normals_out)
-            } else if teapot[i + 1] == 't' {
-                i = parse_texcoord(teapot, i + 2, &texcoords_out)
-            }
-            case 'f': i = parse_face(teapot, i, &indices_out, &normal_indices_out, &texcoord_indices_out)
-        }
-    }
-
-    return out, indices_out, normals_out, normal_indices_out, texcoords_out, texcoord_indices_out
-}
+import "ze:obj"
 
 Renderable :: struct {
     vertex_buffer: rc.BufferHandle,
@@ -208,7 +26,7 @@ Renderable :: struct {
 }
 
 create_renderable :: proc(renderer_state: ^rd3d12.State, rc_state: ^rc.State, filename: string, shader: rc.ShaderHandle) -> (ren: Renderable) {
-    vertices, indices, normals, normal_indices, texcoords, texcoord_indices := load_obj_model(filename)
+    vertices, indices, normals, normal_indices, texcoords, texcoord_indices := obj.load(filename)
     defer delete(vertices)
     defer delete(indices)
     defer delete(normals)
