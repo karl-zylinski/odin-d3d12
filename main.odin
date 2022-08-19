@@ -14,11 +14,11 @@ import "vendor:sdl2"
 import "vendor:directx/dxgi"
 import "render_d3d12"
 
-import rc "zoge:render_commands"
-import "zoge:render_types"
-import "zoge:shader_system"
-import "zoge:base"
-import "zoge:math"
+import rc "ze:render_commands"
+import "ze:render_types"
+import "ze:shader_system"
+import "ze:base"
+import "ze:math"
 
 load_obj_model :: proc(filename: string) -> ([dynamic]f32, [dynamic]u32, [dynamic]f32, [dynamic]u32, [dynamic]f32, [dynamic]u32)  {
     f, err := os.open(filename)

@@ -4,10 +4,10 @@ import "core:slice"
 import "core:mem"
 import "core:math/linalg/hlsl"
 
-import "zoge:render_types"
-import "zoge:math"
-import "zoge:shader_system"
-import "zoge:base"
+import "ze:render_types"
+import "ze:math"
+import "ze:shader_system"
+import "ze:base"
 
 // Public types
 

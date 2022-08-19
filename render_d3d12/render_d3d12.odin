@@ -13,10 +13,10 @@ import "vendor:directx/dxgi"
 import "vendor:directx/d3d_compiler"
 import "vendor:directx/dxc"
 
-import rc "zoge:render_commands"
-import rt "zoge:render_types"
-import ss "zoge:shader_system"
-import "zoge:base"
+import rc "ze:render_commands"
+import rt "ze:render_types"
+import ss "ze:shader_system"
+import "ze:base"
 
 NUM_RENDERTARGETS :: 2
 CONSTANT_BUFFER_UNINITIALIZED :: 0xFFFFFFFF

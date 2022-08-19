@@ -4,7 +4,6 @@ TODO:
 * Is BeginPass actually BeginDrawCall and DrawCall -> SubmitDrawCall. Maybe?
 * Move BufferWithNamedOffsets to separate file or sumth
 * Maybe we can move the queue etc to State struct and then have an explicit Swapchain (or whatever it should be called) creation command that returns a handle to it. Then SetRenderTarget etc can take either a resource or a swapchain. Maybe?! We might get rid of Pipeline state struct then, if previous point are also done.
-* Fix build system include path so I dont have to write ".." in front of things. I.e. make my project like vendor: or core:
 * Replace delay_destruction with fences that are checked each frame
     * Just a destroy_counter that gets signaled on fence, check how completed it is and release all pending-to-be-destroyed resources that have a lower counter value
 * Vertex & index buffers bindless
@@ -17,6 +16,7 @@ TODO:
 
 DONE:
 
+* Fix build system include path so I dont have to write ".." in front of things. I.e. make my project like vendor: or core:
 * CBV heap is currently advanced by 33 slots each frame. Instead, get this information from the Shader and advance it properly depending on the set shader.
 * Textures
     X CreateTexture exists now, but when does the upload heap die? It can't be released before copying is done.
