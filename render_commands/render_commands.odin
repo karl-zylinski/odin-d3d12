@@ -4,24 +4,24 @@ import "core:slice"
 import "core:mem"
 import "core:math/linalg/hlsl"
 
-import "ze:render_types"
+import rt "ze:render_types"
 import "ze:math"
-import "ze:shader_system"
+import ss "ze:shader_system"
 import "ze:base"
 
 // Public types
 
 // We define these different handle to have some sort of type safety. They are still casted internally in the render backend,
 // but for the user using this API, handles should be quite type safe.
-AnyHandle :: distinct render_types.Handle
-TextureHandle :: distinct render_types.Handle
-BufferHandle :: distinct render_types.Handle
-PipelineHandle :: distinct render_types.Handle
-ShaderHandle :: distinct render_types.Handle
+AnyHandle :: distinct rt.Handle
+TextureHandle :: distinct rt.Handle
+BufferHandle :: distinct rt.Handle
+PipelineHandle :: distinct rt.Handle
+ShaderHandle :: distinct rt.Handle
 
 State :: struct {
-    max_handle: render_types.Handle,
-    freelist: [dynamic]render_types.Handle,
+    max_handle: rt.Handle,
+    freelist: [dynamic]rt.Handle,
 }
 
 CommandList :: struct {
@@ -43,9 +43,9 @@ destroy_state :: proc(s: ^State) {
     delete(s.freelist)
 }
 
-destroy_resource :: proc(cmdlist: ^CommandList, handle: $T/render_types.Handle) {
+destroy_resource :: proc(cmdlist: ^CommandList, handle: $T/rt.Handle) {
     append(&cmdlist.commands, DestroyResource { handle = AnyHandle(handle) })
-    append(&cmdlist.state.freelist, render_types.Handle(handle))
+    append(&cmdlist.state.freelist, rt.Handle(handle))
 }
 
 update_buffer :: proc(cmdlist: ^CommandList, handle: BufferHandle, data: rawptr, size: int) {
@@ -86,7 +86,7 @@ create_buffer :: proc(cmdlist: ^CommandList, size: int, data: rawptr, data_size:
     return h
 }
 
-create_pipeline :: proc(cmdlist: ^CommandList, x: f32, y: f32, window_handle: render_types.WindowHandle) -> PipelineHandle {
+create_pipeline :: proc(cmdlist: ^CommandList, x: f32, y: f32, window_handle: rt.WindowHandle) -> PipelineHandle {
     h := PipelineHandle(get_handle(cmdlist.state))
 
     c := CreatePipeline {
@@ -100,7 +100,7 @@ create_pipeline :: proc(cmdlist: ^CommandList, x: f32, y: f32, window_handle: re
     return h
 }
 
-create_shader :: proc(cmdlist: ^CommandList, shader: shader_system.Shader) -> ShaderHandle {
+create_shader :: proc(cmdlist: ^CommandList, shader: ss.Shader) -> ShaderHandle {
     h := ShaderHandle(get_handle(cmdlist.state))
 
     c := CreateShader {
@@ -125,10 +125,10 @@ set_constant :: proc(cmdlist: ^CommandList, name: base.StrHash, offset: int) {
     })
 }
 
-create_texture :: proc(cmdlist: ^CommandList, format: render_types.TextureFormat, width: int, height: int, data: rawptr) -> TextureHandle {
+create_texture :: proc(cmdlist: ^CommandList, format: rt.TextureFormat, width: int, height: int, data: rawptr) -> TextureHandle {
     h := TextureHandle(get_handle(cmdlist.state))
 
-    tx_size := render_types.texture_size(format, width, height)
+    tx_size := rt.texture_size(format, width, height)
 
     c := CreateTexture {
         handle = h,
@@ -157,7 +157,7 @@ draw_call :: proc(cmdlist: ^CommandList, vertex_buffer: BufferHandle, index_buff
     })
 }
 
-get_handle :: proc(s: ^State) -> render_types.Handle {
+get_handle :: proc(s: ^State) -> rt.Handle {
     if len(s.freelist) > 0 {
         return pop(&s.freelist)
     }
@@ -193,7 +193,7 @@ set_viewport :: proc(cmdlist: ^CommandList, rect: math.Rect) {
     })
 }
 
-resource_transition :: proc(cmdlist: ^CommandList, handle: $T/render_types.Handle, before: ResourceState, after: ResourceState) {
+resource_transition :: proc(cmdlist: ^CommandList, handle: $T/rt.Handle, before: ResourceState, after: ResourceState) {
     append(&cmdlist.commands, ResourceTransition {
         resource = AnyHandle(handle),
         before = before,
@@ -296,12 +296,12 @@ SetScissor :: struct {
 CreatePipeline :: struct {
     handle: PipelineHandle,
     swapchain_x, swapchain_y: f32,
-    window_handle: render_types.WindowHandle,
+    window_handle: rt.WindowHandle,
 }
 
 CreateShader :: struct {
     handle: ShaderHandle,
-    shader: shader_system.Shader,
+    shader: ss.Shader,
 }
 
 SetShader :: struct {
@@ -320,7 +320,7 @@ SetConstant :: struct {
 CreateTexture :: struct {
     handle: TextureHandle,
     data: rawptr,
-    format: render_types.TextureFormat,
+    format: rt.TextureFormat,
     width: int,
     height: int,
 }

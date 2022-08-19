@@ -19,7 +19,6 @@ import ss "ze:shader_system"
 import "ze:base"
 
 NUM_RENDERTARGETS :: 2
-CONSTANT_BUFFER_UNINITIALIZED :: 0xFFFFFFFF
 
 CBV_HEAP_SIZE :: 1000
 RTV_HEAP_SIZE :: 100

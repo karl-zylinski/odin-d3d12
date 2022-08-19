@@ -12,11 +12,11 @@ import "core:image/png"
 
 import "vendor:sdl2"
 import "vendor:directx/dxgi"
-import "render_d3d12"
 
+import rd3d12 "ze:render_d3d12"
 import rc "ze:render_commands"
-import "ze:render_types"
-import "ze:shader_system"
+import rt "ze:render_types"
+import ss "ze:shader_system"
 import "ze:base"
 import "ze:math"
 
@@ -207,7 +207,7 @@ Renderable :: struct {
     shader: rc.ShaderHandle,
 }
 
-create_renderable :: proc(renderer_state: ^render_d3d12.State, rc_state: ^rc.State, filename: string, shader: rc.ShaderHandle) -> (ren: Renderable) {
+create_renderable :: proc(renderer_state: ^rd3d12.State, rc_state: ^rc.State, filename: string, shader: rc.ShaderHandle) -> (ren: Renderable) {
     vertices, indices, normals, normal_indices, texcoords, texcoord_indices := load_obj_model(filename)
     defer delete(vertices)
     defer delete(indices)
@@ -256,7 +256,7 @@ create_renderable :: proc(renderer_state: ^render_d3d12.State, rc_state: ^rc.Sta
     ren.index_buffer = rc.create_buffer(&cmdlist, index_buffer_size, rawptr(&indices[0]), index_buffer_size, 4)
     rc.resource_transition(&cmdlist, ren.index_buffer, .CopyDest, .IndexBuffer)
     rc.execute(&cmdlist)
-    render_d3d12.submit_command_list(renderer_state, &cmdlist)
+    rd3d12.submit_command_list(renderer_state, &cmdlist)
 
     ren.shader = shader
 
@@ -304,7 +304,7 @@ run :: proc() {
     window_info: sdl2.SysWMinfo
     sdl2.GetWindowWMInfo(window, &window_info)
     window_handle := dxgi.HWND(window_info.info.win.window)
-    renderer_state := render_d3d12.create(wx, wy, window_handle)
+    renderer_state := rd3d12.create(wx, wy, window_handle)
     rc_state: rc.State
     pipeline: rc.PipelineHandle
     shader: rc.ShaderHandle
@@ -314,8 +314,8 @@ run :: proc() {
     {
         cmdlist := rc.create_command_list(&rc_state)
         rc.begin_resource_creation(&cmdlist)
-        pipeline = rc.create_pipeline(&cmdlist, f32(wx), f32(wy), render_types.WindowHandle(uintptr(window_handle)))
-        shader_def := shader_system.load_shader("shader.shader")
+        pipeline = rc.create_pipeline(&cmdlist, f32(wx), f32(wy), rt.WindowHandle(uintptr(window_handle)))
+        shader_def := ss.load_shader("shader.shader")
         shader = rc.create_shader(&cmdlist, shader_def)
         constants_buffer = rc.create_buffer(&cmdlist, 4096, nil, 0, 0)
         rc.resource_transition(&cmdlist, constants_buffer, .CopyDest, .ConstantBuffer)
@@ -333,7 +333,7 @@ run :: proc() {
         }
 
         rc.execute(&cmdlist)
-        render_d3d12.submit_command_list(&renderer_state, &cmdlist)
+        rd3d12.submit_command_list(&renderer_state, &cmdlist)
     }
 
     ren := create_renderable(&renderer_state, &rc_state, "stone3.obj", shader)
@@ -436,7 +436,7 @@ run :: proc() {
         sun_pos := math.float3 {
             math.cos(f32(t))*50, 0, math.sin(f32(t))*50,
         }
-        render_d3d12.update(&renderer_state)
+        rd3d12.update(&renderer_state)
 
         cmdlist := rc.create_command_list(&rc_state)
 
@@ -475,7 +475,7 @@ run :: proc() {
         rc.resource_transition(&cmdlist, pipeline, .RenderTarget, .Present)
         rc.execute(&cmdlist)
         rc.present(&cmdlist)
-        render_d3d12.submit_command_list(&renderer_state, &cmdlist)
+        rd3d12.submit_command_list(&renderer_state, &cmdlist)
     }
 
     {
@@ -487,10 +487,10 @@ run :: proc() {
         rc.destroy_resource(&cmdlist, color_tex)
         rc.destroy_resource(&cmdlist, normal_tex)
         rc.destroy_resource(&cmdlist, constants_buffer)
-        render_d3d12.submit_command_list(&renderer_state, &cmdlist)
+        rd3d12.submit_command_list(&renderer_state, &cmdlist)
     }
     
-    render_d3d12.destroy(&renderer_state)
+    rd3d12.destroy(&renderer_state)
     rc.destroy_state(&rc_state)
 }
 
