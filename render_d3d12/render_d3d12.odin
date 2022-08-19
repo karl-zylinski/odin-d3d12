@@ -1,4 +1,4 @@
-package renderer_d3d12
+package render_d3d12
 
 import "core:fmt"
 import "core:mem"
@@ -466,8 +466,14 @@ cmdlist_assert :: proc(m: Maybe($T), loc := #caller_location) -> (T, bool) {
 submit_command_list :: proc(s: ^State, commandlist: ^rc.CommandList) {
     hr: d3d12.HRESULT
 
+    // Only set by BeginResourceCreation or BeginPass
     current_cmdlist: Maybe(^d3d12.IGraphicsCommandList)
+
+    // Only set by SetShader
     current_shader: Maybe(^Shader)
+
+    // Only be set by BeginPass
+    current_pipeline: Maybe(^Pipeline)
 
     for command in &commandlist.commands {
         cmdswitch: switch c in &command {
@@ -490,6 +496,16 @@ submit_command_list :: proc(s: ^State, commandlist: ^rc.CommandList) {
                 current_cmdlist = s.resource_cmdlist
             }
             case rc.BeginPass: {
+                if current_cmdlist != nil {
+                    fmt.println("Trying to run BeginPass twice, or when BeginResourceCreation has already been run!")
+                    return
+                }
+
+                if current_pipeline != nil {
+                    fmt.println("Trying to run BeginPass twice!")
+                    return
+                }
+
                 if p, ok := &s.resources[c.pipeline].resource.(Pipeline); ok {
                     frame_index := p->swapchain->GetCurrentBackBufferIndex()
                     bs := &p.backbuffer_states[frame_index]
@@ -507,6 +523,7 @@ submit_command_list :: proc(s: ^State, commandlist: ^rc.CommandList) {
 
                     bs.cmdlist->SetDescriptorHeaps(1, &s.cbv_heap);
                     current_cmdlist = bs.cmdlist
+                    current_pipeline = p
                 }
             }
             case rc.SetTexture: {
@@ -1303,7 +1320,7 @@ submit_command_list :: proc(s: ^State, commandlist: ^rc.CommandList) {
             
             case rc.Present:
                 if shader, ok := maybe_assert(current_shader, "Shader not set"); ok {
-                    if p, ok := &s.resources[c.handle].resource.(Pipeline); ok {
+                    if p, ok := maybe_assert(current_pipeline, "Pipeline not set"); ok {
                         flags: u32
                         params: dxgi.PRESENT_PARAMETERS
                         frame_index := p->swapchain->GetCurrentBackBufferIndex()

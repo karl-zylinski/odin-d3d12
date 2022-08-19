@@ -10,6 +10,8 @@ import "../base"
 
 // Public types
 
+// We define these different handle to have some sort of type safety. They are still casted internally in the render backend,
+// but for the user using this API, handles should be quite type safe.
 AnyHandle :: distinct render_types.Handle
 TextureHandle :: distinct render_types.Handle
 BufferHandle :: distinct render_types.Handle
@@ -227,17 +229,15 @@ execute :: proc(cmdlist: ^CommandList) {
     append(&cmdlist.commands, Execute{})
 }
 
-present :: proc(cmdlist: ^CommandList, pipeline: PipelineHandle) {
-    append(&cmdlist.commands, Present{ handle = pipeline })
+present :: proc(cmdlist: ^CommandList) {
+    append(&cmdlist.commands, Present{})
 }
 
 // Internal types
 
 Noop :: struct {}
 
-Present :: struct {
-    handle: PipelineHandle,
-}
+Present :: struct {}
 
 Execute :: struct {}
 
@@ -300,7 +300,6 @@ CreatePipeline :: struct {
 
 CreateShader :: struct {
     handle: ShaderHandle,
-    pipeline: PipelineHandle,
     shader: shader_system.Shader,
 }
 

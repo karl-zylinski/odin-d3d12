@@ -472,7 +472,7 @@ run :: proc() {
         rc.draw_call(&cmdlist, ren.vertex_buffer, ren.index_buffer)
         rc.resource_transition(&cmdlist, pipeline, .RenderTarget, .Present)
         rc.execute(&cmdlist)
-        rc.present(&cmdlist, pipeline)
+        rc.present(&cmdlist)
         render_d3d12.submit_command_list(&renderer_state, &cmdlist)
     }
 
