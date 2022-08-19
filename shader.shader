@@ -27,7 +27,7 @@ VertexOutput vertex_shader(uint vertex_id : SV_VertexID) {
     result.world_pos = v.position.xyz;
     result.normal = v.normal;
     result.uv = v.uv;
-    
+
     return result;
 }
 

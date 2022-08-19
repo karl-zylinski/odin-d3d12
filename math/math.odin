@@ -5,6 +5,7 @@ import h "core:math/linalg/hlsl"
 
 // Types
 
+float2 :: h.float2
 float3 :: h.float3
 float4 :: h.float4
 float4x4 :: h.float4x4

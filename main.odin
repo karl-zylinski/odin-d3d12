@@ -132,11 +132,11 @@ load_obj_model :: proc(filename: string) -> ([dynamic]f32, [dynamic]u32, [dynami
             i += 1
         }
 
-        ni, _ := strconv.parse_int(teapot[start:i])
+        ti, _ := strconv.parse_int(teapot[start:i])
         i += 1
 
         if num_slashes == 1 {
-            return i, u32(ii - 1), u32(ni - 1), 0
+            return i, u32(ii - 1), u32(ti - 1), 0
         }
 
         start = i
@@ -145,7 +145,7 @@ load_obj_model :: proc(filename: string) -> ([dynamic]f32, [dynamic]u32, [dynami
             i += 1
         }
 
-        ti, _ := strconv.parse_int(teapot[start:i])
+        ni, _ := strconv.parse_int(teapot[start:i])
         return i, u32(ii - 1), u32(ti - 1), u32(ni - 1)
     }
 
@@ -165,11 +165,11 @@ load_obj_model :: proc(filename: string) -> ([dynamic]f32, [dynamic]u32, [dynami
 
         i := skip_whitespace(teapot, i_in + 1)
         n0, n1, n2, in0, in1, in2, t0, t1, t2: u32
-        i, n0, in0, t0 = parse_face_index(teapot, i)
+        i, n0, t0, in0 = parse_face_index(teapot, i)
         i = skip_whitespace(teapot, i)
-        i, n1, in1, t1 = parse_face_index(teapot, i)
+        i, n1, t1, in1 = parse_face_index(teapot, i)
         i = skip_whitespace(teapot, i)
-        i, n2, in2, t2 = parse_face_index(teapot, i)
+        i, n2, t2, in2 = parse_face_index(teapot, i)
         append(out, n0, n1, n2)
 
         if num_slashes >= 3 {
@@ -216,33 +216,43 @@ create_renderable :: proc(renderer_state: ^rd3d12.State, rc_state: ^rc.State, fi
     defer delete(texcoords)
     defer delete(texcoord_indices)
 
-    vertex_data := make([]f32, len(vertices) * 3)
+    Vertex :: struct {
+        position: math.float3,
+        normal: math.float3,
+        uv: math.float2,
+    }
+
+    vertex_data := make([]Vertex, len(vertices) / 3)
     defer delete(vertex_data)
-    vdi := 0
-    for v, i in vertices {
-        vertex_data[vdi] = vertices[i]
-        vdi += 1
-        if (i + 1) % 3 == 0 && i != 0 {
-            vdi += 5
+
+    for vd, i in &vertex_data {
+        vd.position = {
+            vertices[i * 3],
+            vertices[i * 3 + 1],
+            vertices[i * 3 + 2],
         }
     }
 
     if len(normals) > 0 {
         for i in 0..<len(normal_indices) {
             n_idx := normal_indices[i] * 3
-            v_idx := indices[i] * 8 + 3
-            vertex_data[v_idx] = normals[n_idx]
-            vertex_data[v_idx + 1] = normals[n_idx + 1]
-            vertex_data[v_idx + 2] = normals[n_idx + 2]
+            v_idx := indices[i]
+            vertex_data[v_idx].normal = {
+                normals[n_idx],
+                normals[n_idx + 1],
+                normals[n_idx + 2],
+            }
         }
     }
 
     if len(texcoords) > 0 {
         for i in 0..<len(texcoord_indices) {
-            n_idx := texcoord_indices[i] * 2
-            v_idx := indices[i] * 8 + 6
-            vertex_data[v_idx] = texcoords[n_idx]
-            vertex_data[v_idx + 1] = texcoords[n_idx + 1]
+            t_idx := texcoord_indices[i] * 2
+            v_idx := indices[i]
+            vertex_data[v_idx].uv = {
+                texcoords[t_idx],
+                texcoords[t_idx + 1],
+            }
         }
     }
 
