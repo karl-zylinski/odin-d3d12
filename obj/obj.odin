@@ -200,3 +200,10 @@ load :: proc(filename: string) -> Obj  {
 
     return res
 }
+
+free :: proc(obj: ^Obj) {
+    delete(obj.vertices)
+    delete(obj.normals)
+    delete(obj.uvs)
+    delete(obj.indices)
+}

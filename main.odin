@@ -27,10 +27,7 @@ Renderable :: struct {
 
 create_renderable :: proc(renderer_state: ^rd3d12.State, rc_state: ^rc.State, filename: string, shader: rc.ShaderHandle) -> (ren: Renderable) {
     loaded_obj := obj.load(filename)
-    defer delete(loaded_obj.vertices)
-    defer delete(loaded_obj.normals)
-    defer delete(loaded_obj.uvs)
-    defer delete(loaded_obj.indices)
+    defer obj.free(&loaded_obj)
 
     Vertex :: struct {
         position: math.float3,
