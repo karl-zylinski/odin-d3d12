@@ -20,7 +20,7 @@ import ss "ze:shader_system"
 import "ze:base"
 import "ze:math"
 
-load_obj_model :: proc(filename: string) -> ([dynamic]f32, [dynamic]u32, [dynamic]f32, [dynamic]u32, [dynamic]f32, [dynamic]u32)  {
+load_obj_model :: proc(filename: string) -> ([dynamic]math.float3, [dynamic]u32, [dynamic]math.float3, [dynamic]u32, [dynamic]math.float2, [dynamic]u32)  {
     f, err := os.open(filename)
     defer os.close(f)
     fs, _ := os.file_size(f)
@@ -28,9 +28,9 @@ load_obj_model :: proc(filename: string) -> ([dynamic]f32, [dynamic]u32, [dynami
     defer delete(teapot_bytes)
     os.read(f, teapot_bytes)
     teapot := strings.string_from_ptr(&teapot_bytes[0], int(fs))
-    out: [dynamic]f32
-    normals_out: [dynamic]f32
-    texcoords_out: [dynamic]f32
+    out: [dynamic]math.float3
+    normals_out: [dynamic]math.float3
+    texcoords_out: [dynamic]math.float2
     indices_out: [dynamic]u32
     normal_indices_out: [dynamic]u32
     texcoord_indices_out: [dynamic]u32
@@ -70,7 +70,7 @@ load_obj_model :: proc(filename: string) -> ([dynamic]f32, [dynamic]u32, [dynami
         return i, num
     }
 
-    parse_vertex :: proc(teapot: string, i_in: int, out: ^[dynamic]f32) -> int {
+    parse_vertex :: proc(teapot: string, i_in: int, out: ^[dynamic]math.float3) -> int {
         i := skip_whitespace(teapot, i_in)
         n0, n1, n2: f32
         i, n0 = parse_number(teapot, i)
@@ -78,11 +78,11 @@ load_obj_model :: proc(filename: string) -> ([dynamic]f32, [dynamic]u32, [dynami
         i, n1 = parse_number(teapot, i)
         i = skip_whitespace(teapot, i)
         i, n2 = parse_number(teapot, i)
-        append(out, n0, n1, n2)
+        append(out, math.float3 { n0, n1, n2 })
         return i
     }
 
-    parse_texcoord :: proc(teapot: string, i_in: int, out: ^[dynamic]f32) -> int {
+    parse_texcoord :: proc(teapot: string, i_in: int, out: ^[dynamic]math.float2) -> int {
         i := skip_whitespace(teapot, i_in)
         n0, n1: f32
         i, n0 = parse_number(teapot, i)
@@ -94,7 +94,7 @@ load_obj_model :: proc(filename: string) -> ([dynamic]f32, [dynamic]u32, [dynami
             i += 1
         }
 
-        append(out, n0, n1)
+        append(out, math.float2 { n0, n1 })
         return i
     }
 
@@ -222,37 +222,22 @@ create_renderable :: proc(renderer_state: ^rd3d12.State, rc_state: ^rc.State, fi
         uv: math.float2,
     }
 
-    vertex_data := make([]Vertex, len(vertices) / 3)
+    vertex_data := make([]Vertex, len(vertices))
     defer delete(vertex_data)
 
     for vd, i in &vertex_data {
-        vd.position = {
-            vertices[i * 3],
-            vertices[i * 3 + 1],
-            vertices[i * 3 + 2],
-        }
+        vd.position = vertices[i]
     }
 
     if len(normals) > 0 {
         for i in 0..<len(normal_indices) {
-            n_idx := normal_indices[i] * 3
-            v_idx := indices[i]
-            vertex_data[v_idx].normal = {
-                normals[n_idx],
-                normals[n_idx + 1],
-                normals[n_idx + 2],
-            }
+            vertex_data[indices[i]].normal = normals[normal_indices[i]]
         }
     }
 
     if len(texcoords) > 0 {
         for i in 0..<len(texcoord_indices) {
-            t_idx := texcoord_indices[i] * 2
-            v_idx := indices[i]
-            vertex_data[v_idx].uv = {
-                texcoords[t_idx],
-                texcoords[t_idx + 1],
-            }
+            vertex_data[indices[i]].uv = texcoords[texcoord_indices[i]]
         }
     }
 
