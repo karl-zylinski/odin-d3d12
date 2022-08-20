@@ -10,7 +10,6 @@ import "core:intrinsics"
 
 import "vendor:directx/d3d12"
 import "vendor:directx/dxgi"
-import "vendor:directx/d3d_compiler"
 import "vendor:directx/dxc"
 
 import rc "ze:render_commands"
@@ -754,15 +753,6 @@ submit_command_list :: proc(s: ^State, commandlist: ^rc.CommandList) {
             case rc.CreateShader: {
                 rd: Shader
 
-                compile_flags: u32 = 0
-                when ODIN_DEBUG {
-                    compile_flags |= u32(d3d_compiler.D3DCOMPILE.DEBUG)
-                    compile_flags |= u32(d3d_compiler.D3DCOMPILE.SKIP_OPTIMIZATION)
-                }
-
-                vs: ^d3d12.IBlob = nil
-                ps: ^d3d12.IBlob = nil
-
                 vs_compiled: ^dxc.IBlob
                 ps_compiled: ^dxc.IBlob
 
@@ -806,33 +796,6 @@ submit_command_list :: proc(s: ^State, commandlist: ^rc.CommandList) {
                     }
                 }
 
-
-             /*   errors: ^d3d12.IBlob = nil
-
-                hr = d3d_compiler.Compile(def.code, uint(def.code_size), nil, nil, nil, "vertex_shader", "vs_5_1", compile_flags, 0, &vs, &errors)
-                errors_sz := errors != nil ? errors->GetBufferSize() : 0
-
-                if errors_sz > 0 {
-                    errors_ptr := errors->GetBufferPointer()
-                    error_str := strings.string_from_ptr((^u8)(errors_ptr), int(errors_sz))
-                    fmt.println(error_str)
-                }
-
-                check(hr, s.info_queue, "Failed to compile vertex shader")
-
-                hr = d3d_compiler.Compile(def.code, uint(def.code_size), nil, nil, nil, "pixel_shader", "ps_5_1", compile_flags, 0, &ps, &errors)
-
-
-                errors_sz = errors != nil ? errors->GetBufferSize() : 0
-
-                if errors_sz > 0 {
-                    errors_ptr := errors->GetBufferPointer()
-                    error_str := strings.string_from_ptr((^u8)(errors_ptr), int(errors_sz))
-                    fmt.println(error_str)
-                }
-
-                check(hr, s.info_queue, "Failed to compile pixel shader")*/
-
                 for cb, cb_idx in def.constant_buffers {
                     append(&rd.constant_buffers, ShaderConstantBuffer{ name = base.hash(cb.name) })
                 }
@@ -842,10 +805,10 @@ submit_command_list :: proc(s: ^State, commandlist: ^rc.CommandList) {
                 }
 
                 for s in def.vertex_inputs {
-                    append(&rd.vertex_inputs, VertexInput { name = base.hash(s.name) })   
+                    append(&rd.vertex_inputs, VertexInput { name = base.hash(s.name) })
                 }
 
-                total_num_handles := get_total_number_of_handles(&rd) 
+                total_num_handles := get_total_number_of_handles(&rd)
                 if total_num_handles > (CBV_HEAP_SIZE / NUM_RENDERTARGETS) {
                     fmt.printf("Shader uses too many handles, wants: %v. Avaiable: %v (calculated using %v/NUM_RENDERTARGETS, where NUM_RENDERTARGETS is %v)\n", total_num_handles, CBV_HEAP_SIZE/NUM_RENDERTARGETS, CBV_HEAP_SIZE, NUM_RENDERTARGETS)
                 }
@@ -906,7 +869,7 @@ submit_command_list :: proc(s: ^State, commandlist: ^rc.CommandList) {
                     root_parameters[0].DescriptorTable = descriptor_table
                     root_parameters[1].Constants = {
                         ShaderRegister = 0,
-                        RegisterSpace = 0, 
+                        RegisterSpace = 0,
                         Num32BitValues = 32,
                     }
 
@@ -1021,10 +984,6 @@ submit_command_list :: proc(s: ^State, commandlist: ^rc.CommandList) {
                         DepthFunc = .LESS,
                         StencilEnable = false,
                     },
-                  /*  InputLayout = {
-                        pInputElementDescs = &vertex_format[0],
-                        NumElements = u32(len(vertex_format)),
-                    },*/
                     PrimitiveTopologyType = .TRIANGLE,
                     NumRenderTargets = 1,
                     RTVFormats = { 0 = .R8G8B8A8_UNORM, 1..=7 = .UNKNOWN },
@@ -1038,8 +997,6 @@ submit_command_list :: proc(s: ^State, commandlist: ^rc.CommandList) {
                 hr = s.device->CreateGraphicsPipelineState(&pipeline_state_desc, d3d12.IPipelineState_UUID, (^rawptr)(&rd.pipeline_state))
                 check(hr, s.info_queue, "Pipeline creation failed")
 
-                /*vs->Release()
-                ps->Release()*/
                 ss.free_shader(&def)
                 set_resource(s, c.handle, rd)
             }
@@ -1071,7 +1028,7 @@ submit_command_list :: proc(s: ^State, commandlist: ^rc.CommandList) {
 
                     upload_map: rawptr
                     upload_res->Map(0, &d3d12.RANGE{}, &upload_map)
-                    mem.copy(upload_map, c.data, c.data_size)    
+                    mem.copy(upload_map, c.data, c.data_size)
                     upload_res->Unmap(0, nil)
                 }
 
@@ -1187,7 +1144,7 @@ submit_command_list :: proc(s: ^State, commandlist: ^rc.CommandList) {
                     depth: ^d3d12.IResource
 
                     if p, ok := &s.resources[c.resource].resource.(Pipeline); ok {
-                        frame_index := p->swapchain->GetCurrentBackBufferIndex()   
+                        frame_index := p->swapchain->GetCurrentBackBufferIndex()
                         rt = p.backbuffer_states[frame_index].render_target
                         depth = p.depth
                     }
@@ -1210,7 +1167,7 @@ submit_command_list :: proc(s: ^State, commandlist: ^rc.CommandList) {
                 }
             }
 
-            case rc.ClearRenderTarget: 
+            case rc.ClearRenderTarget:
                 if p, ok := &s.resources[c.resource].resource.(Pipeline); ok {
                     if cmdlist, ok := cmdlist_assert(current_cmdlist); ok {
                         rtv_handle := next_rtv_handle(s)
@@ -1218,7 +1175,7 @@ submit_command_list :: proc(s: ^State, commandlist: ^rc.CommandList) {
                         rt := p.backbuffer_states[frame_index].render_target
                         s.device->CreateRenderTargetView(rt, nil, rtv_handle)
                         cmdlist->ClearRenderTargetView(rtv_handle, (^[4]f32)(&c.clear_color), 0, nil)
-                        
+
                         dsv_handle := next_dsv_handle(s)
                         dsv_desc := d3d12.DEPTH_STENCIL_VIEW_DESC {
                             Format = .D32_FLOAT,
@@ -1318,7 +1275,7 @@ submit_command_list :: proc(s: ^State, commandlist: ^rc.CommandList) {
                     s.queue->ExecuteCommandLists(len(cmdlists), (^^d3d12.ICommandList)(&cmdlists[0]))
                 }
             }
-            
+
             case rc.Present:
                 if shader, ok := maybe_assert(current_shader, "Shader not set"); ok {
                     if p, ok := maybe_assert(current_pipeline, "Pipeline not set"); ok {
