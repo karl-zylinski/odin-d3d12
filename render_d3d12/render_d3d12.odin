@@ -876,13 +876,13 @@ submit_command_list :: proc(s: ^State, commandlist: ^rc.CommandList) {
                     // create a static sampler
                     sampler := d3d12.STATIC_SAMPLER_DESC {
                         Filter = .MIN_MAG_MIP_POINT,
-                        AddressU = .CLAMP,
-                        AddressV = .CLAMP,
-                        AddressW = .CLAMP,
+                        AddressU = .BORDER,
+                        AddressV = .BORDER,
+                        AddressW = .BORDER,
                         MipLODBias = 0,
                         MaxAnisotropy = 0,
                         ComparisonFunc = .NEVER,
-                        BorderColor = .TRANSPARENT_BLACK,
+                        BorderColor = .OPAQUE_WHITE,
                         MinLOD = 0,
                         MaxLOD = d3d12.FLOAT32_MAX,
                         ShaderRegister = 0,

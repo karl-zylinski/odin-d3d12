@@ -24,3 +24,4 @@ inverse :: h.inverse
 cos :: m.cos
 sin :: m.sin
 fract :: l.fract
+normalize :: h.normalize

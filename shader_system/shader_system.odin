@@ -245,12 +245,12 @@ load_shader :: proc(path: string) -> Shader {
 
             strings.write_string(&generated, "};\n\n")
         }
-        
+
         if len(shader.constant_buffers) > 0 {
             strings.write_string(&generated, "ByteAddressBuffer constant_buffer : register(t0, space0);\n\n")
 
             strings.write_string(&generated, "struct IndexConstants {\n")
-            
+
             for cb in shader.constant_buffers {
                 strings.write_string(&generated, "\tuint ")
                 strings.write_string(&generated, cb.name)
@@ -297,7 +297,7 @@ load_shader :: proc(path: string) -> Shader {
             strings.write_string(&generated, "Texture2D bindless_textures[] : register(t0, space1);\n\n")
 
             strings.write_string(&generated, "struct IndexTextures {\n")
-            
+
             for t in shader.textures_2d {
                 strings.write_string(&generated, "\tuint ")
                 strings.write_string(&generated, t.name)

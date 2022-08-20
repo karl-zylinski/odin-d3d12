@@ -3,6 +3,7 @@ package obj
 import "core:os"
 import "core:strings"
 import "core:strconv"
+import "core:fmt"
 
 import "ze:math"
 
@@ -12,11 +13,15 @@ Index :: struct {
     uv: u32,
 }
 
+Triangle :: struct {
+    indices: [3]Index,
+}
+
 Obj :: struct {
     vertices: [dynamic]math.float3,
     normals: [dynamic]math.float3,
     uvs: [dynamic]math.float2,
-    indices: [dynamic]Index,
+    triangles: [dynamic]Triangle,
 }
 
 load :: proc(filename: string) -> Obj  {
@@ -84,7 +89,7 @@ load :: proc(filename: string) -> Obj  {
         i, n1 = parse_number(source, i)
 
         // There may be a third coordiante, that we skip for now
-        for source[i] != '\n' && source[i] != '\r' {
+        for source[i] != '\n' {
             i += 1
         }
 
@@ -143,7 +148,7 @@ load :: proc(filename: string) -> Obj  {
         return i, u32(ii - 1), u32(ti - 1), u32(ni - 1)
     }
 
-    parse_face :: proc(source: string, i_in: int, out: ^[dynamic]Index) -> int {
+    parse_face :: proc(source: string, i_in: int, out: ^[dynamic]Triangle) -> int {
         num_slashes := 0
 
         {
@@ -158,11 +163,12 @@ load :: proc(filename: string) -> Obj  {
         }
 
         i := skip_whitespace(source, i_in + 1)
+        t: Triangle
 
         {
             new_i, vertex, uv, normal := parse_face_index(source, i)
             i = new_i
-            append(out, Index { vertex = vertex, normal = normal, uv = uv })
+            t.indices[0] = { vertex = vertex, normal = normal, uv = uv }
         }
 
         i = skip_whitespace(source, i)
@@ -170,7 +176,7 @@ load :: proc(filename: string) -> Obj  {
         {
             new_i, vertex, uv, normal := parse_face_index(source, i)
             i = new_i
-            append(out, Index { vertex = vertex, normal = normal, uv = uv })
+            t.indices[1] = { vertex = vertex, normal = normal, uv = uv }
         }
 
         i = skip_whitespace(source, i)
@@ -178,23 +184,27 @@ load :: proc(filename: string) -> Obj  {
         {
             new_i, vertex, uv, normal := parse_face_index(source, i)
             i = new_i
-            append(out, Index { vertex = vertex, normal = normal, uv = uv })
+            t.indices[2] = { vertex = vertex, normal = normal, uv = uv }
         }
+
+        append(out, t)
 
         return i
     }
 
     for i := 0; i < len(source); i += 1 {
-        switch source[i] {
-            case '#': i = parse_comment(source, i)
-            case 'v': if source[i + 1] == ' ' {
-                i = parse_vertex(source, i + 1, &res.vertices)
-            } else if source[i + 1] == 'n' {
-                i = parse_vertex(source, i + 2, &res.normals)
-            } else if source[i + 1] == 't' {
-                i = parse_texcoord(source, i + 2, &res.uvs)
+        if i == 0 || source[i - 1] == '\n' {
+            switch source[i] {
+                case '#': i = parse_comment(source, i)
+                case 'v': if source[i + 1] == ' ' {
+                    i = parse_vertex(source, i + 1, &res.vertices)
+                } else if source[i + 1] == 'n' {
+                    i = parse_vertex(source, i + 2, &res.normals)
+                } else if source[i + 1] == 't' {
+                    i = parse_texcoord(source, i + 2, &res.uvs)
+                }
+                case 'f': i = parse_face(source, i, &res.triangles)
             }
-            case 'f': i = parse_face(source, i, &res.indices)
         }
     }
 
@@ -205,5 +215,5 @@ free :: proc(obj: ^Obj) {
     delete(obj.vertices)
     delete(obj.normals)
     delete(obj.uvs)
-    delete(obj.indices)
+    delete(obj.triangles)
 }

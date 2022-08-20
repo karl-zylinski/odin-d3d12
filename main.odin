@@ -32,6 +32,8 @@ create_renderable :: proc(renderer_state: ^rd3d12.State, rc_state: ^rc.State, fi
     Vertex :: struct {
         position: math.float3,
         normal: math.float3,
+        tangent: math.float3,
+        bitangent: math.float3,
         uv: math.float2,
     }
 
@@ -42,17 +44,51 @@ create_renderable :: proc(renderer_state: ^rd3d12.State, rc_state: ^rc.State, fi
         vd.position = loaded_obj.vertices[i]
     }
 
-    indices := make([]u32, len(loaded_obj.indices))
+    indices := make([]u32, len(loaded_obj.triangles) * 3)
     defer delete(indices)
 
-    for idx, i in loaded_obj.indices {
-        vertex_data[idx.vertex].normal = loaded_obj.normals[idx.normal]
-        vertex_data[idx.vertex].uv = loaded_obj.uvs[idx.uv]
-        indices[i] = u32(idx.vertex)
+    index_idx := 0
+    for t in loaded_obj.triangles {
+        for idx in t.indices {
+            vertex_data[idx.vertex].normal = loaded_obj.normals[idx.normal]
+            vertex_data[idx.vertex].uv = loaded_obj.uvs[idx.uv]
+            indices[index_idx] = u32(idx.vertex)
+            index_idx += 1
+        }
+
+        // tangent & bitangent calc, adapted from Eric Lengyel's C++ code
+        {
+            i0 := t.indices[0].vertex
+            i1 := t.indices[1].vertex
+            i2 := t.indices[2].vertex
+            p0 := loaded_obj.vertices[i0]
+            p1 := loaded_obj.vertices[i1]
+            p2 := loaded_obj.vertices[i2]
+            w0 := loaded_obj.uvs[t.indices[0].uv]
+            w1 := loaded_obj.uvs[t.indices[1].uv]
+            w2 := loaded_obj.uvs[t.indices[2].uv]
+            e1, e2 := p1 - p0, p2 - p0
+            x1, x2 := w1.x - w0.x, w2.x - w0.x
+            y1, y2 := w1.y - w0.y, w2.y - w0.y
+            r := 1.0 / (x1 * y2 - x2 * y1)
+            t := (e1 * y2 - e2 * y1) * r
+            b := (e2 * x1 - e1 * x2) * r
+            vertex_data[i0].tangent += t
+            vertex_data[i1].tangent += t
+            vertex_data[i2].tangent += t
+            vertex_data[i0].bitangent += b
+            vertex_data[i1].bitangent += b
+            vertex_data[i2].bitangent += b
+        }
+    }
+
+    for v in &vertex_data {
+        v.tangent = math.normalize(v.tangent)
+        v.bitangent = math.normalize(v.bitangent)
     }
 
     vertex_buffer_size := len(vertex_data) * size_of(vertex_data[0])
-    index_buffer_size := len(loaded_obj.indices) * size_of(u32)
+    index_buffer_size := len(indices) * size_of(u32)
 
     cmdlist := rc.create_command_list(rc_state)
     rc.begin_resource_creation(&cmdlist)
@@ -128,11 +164,11 @@ run :: proc() {
         {
             ta := base.make_temp_arena()
 
-            if tex, err := png.load("stone3_color.png", {}, ta); err == nil {
+            if tex, err := png.load("rock_color.png", {}, ta); err == nil {
                 color_tex = rc.create_texture(&cmdlist, .R8G8B8A8_UNORM, tex.width, tex.height, &tex.pixels.buf[0])
             }
 
-            if tex, err := png.load("stone3_normal.png", {}, ta); err == nil {
+            if tex, err := png.load("rock_normal.png", {}, ta); err == nil {
                 normal_tex = rc.create_texture(&cmdlist, .R8G8B8A8_UNORM, tex.width, tex.height, &tex.pixels.buf[0])
             }
         }
@@ -141,7 +177,7 @@ run :: proc() {
         rd3d12.submit_command_list(&renderer_state, &cmdlist)
     }
 
-    ren := create_renderable(&renderer_state, &rc_state, "stone3.obj", shader)
+    ren := create_renderable(&renderer_state, &rc_state, "rock.obj", shader)
 
     camera_pos := math.float3 { 0, 0, -2 }
     camera_yaw: f32 = 0
@@ -207,27 +243,27 @@ run :: proc() {
         }
 
         if input[0] {
-            camera_pos += math.mul(camera_rot, math.float4{0,0,1,1}).xyz * 0.1
+            camera_pos += math.mul(camera_rot, math.float4{0,0,1,1}).xyz
         }
 
         if input[1] {
-            camera_pos -= math.mul(camera_rot, math.float4{0,0,1,1}).xyz * 0.1
+            camera_pos -= math.mul(camera_rot, math.float4{0,0,1,1}).xyz
         }
 
         if input[2] {
-            camera_pos -= math.mul(camera_rot, math.float4{1,0,0,1}).xyz * 0.1
+            camera_pos -= math.mul(camera_rot, math.float4{1,0,0,1}).xyz
         }
-            
+
         if input[3] {
-            camera_pos += math.mul(camera_rot, math.float4{1,0,0,1}).xyz * 0.1
+            camera_pos += math.mul(camera_rot, math.float4{1,0,0,1}).xyz
         }
 
         if input[4] {
-            camera_pos -= math.mul(camera_rot, math.float4{0,1,0,1}).xyz * 0.1
+            camera_pos -= math.mul(camera_rot, math.float4{0,1,0,1}).xyz
         }
 
         if input[5] {
-            camera_pos += math.mul(camera_rot, math.float4{0,1,0,1}).xyz * 0.1
+            camera_pos += math.mul(camera_rot, math.float4{0,1,0,1}).xyz
         }
 
         camera_trans: math.float4x4 = 1
@@ -239,7 +275,7 @@ run :: proc() {
         }
 
         sun_pos := math.float3 {
-            math.cos(f32(t))*50, 0, math.sin(f32(t))*50,
+            math.cos(f32(t))*500, 0, math.sin(f32(t))*500,
         }
         rd3d12.update(&renderer_state)
 
