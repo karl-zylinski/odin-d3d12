@@ -4,6 +4,7 @@ TODO:
     * Is our processing of obj index hopping wrong?
     * Or is our sampler broken?
     * Or is the vertexinput data wrong? Unsure, since the positions are all correct!
+    * NOO. It is due to this: !! https://alextardif.com/D3D11To12P3.html !! I am not doing the upload thingy correct.
 * d3d12 renderer should not be dependent on shader_system. I think?
 * Is BeginPass actually BeginDrawCall and DrawCall -> SubmitDrawCall. Maybe?
 * Move BufferWithNamedOffsets to separate file or sumth
