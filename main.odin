@@ -71,41 +71,45 @@ create_renderable :: proc(renderer_state: ^rd3d12.State, rc_state: ^rc.State, fi
 
                 vertex_lookup[key] = vertex_idx
                 append(&indices, u32(vertex_idx))
+                index_lookup[key] = vertex_idx
             } else {
                 append(&indices, u32(v))
+                index_lookup[key] = v
             }
         }
-
-        // tangent & bitangent calc, adapted from Eric Lengyel's C++ code
-       /* {
-            i0 := t.indices[0].vertex
-            i1 := t.indices[1].vertex
-            i2 := t.indices[2].vertex
-            p0 := loaded_obj.vertices[i0]
-            p1 := loaded_obj.vertices[i1]
-            p2 := loaded_obj.vertices[i2]
-            w0 := loaded_obj.uvs[t.indices[0].uv]
-            w1 := loaded_obj.uvs[t.indices[1].uv]
-            w2 := loaded_obj.uvs[t.indices[2].uv]
-            e1, e2 := p1 - p0, p2 - p0
-            x1, x2 := w1.x - w0.x, w2.x - w0.x
-            y1, y2 := w1.y - w0.y, w2.y - w0.y
-            r := 1.0 / (x1 * y2 - x2 * y1)
-            t := (e1 * y2 - e2 * y1) * r
-            b := (e2 * x1 - e1 * x2) * r
-            vertex_data[i0].tangent += t
-            vertex_data[i1].tangent += t
-            vertex_data[i2].tangent += t
-            vertex_data[i0].bitangent += b
-            vertex_data[i1].bitangent += b
-            vertex_data[i2].bitangent += b
-        }*/
     }
 
-   /* for v in &vertex_data {
+    for t in loaded_obj.triangles {
+        key0 := make_key(t.indices[0])
+        key1 := make_key(t.indices[1])
+        key2 := make_key(t.indices[2])
+        i0 := index_lookup[key0]
+        i1 := index_lookup[key1]
+        i2 := index_lookup[key2]
+        p0 := vertex_data[i0].position
+        p1 := vertex_data[i1].position
+        p2 := vertex_data[i2].position
+        w0 := vertex_data[i0].uv
+        w1 := vertex_data[i1].uv
+        w2 := vertex_data[i2].uv
+        e1, e2 := p1 - p0, p2 - p0
+        x1, x2 := w1.x - w0.x, w2.x - w0.x
+        y1, y2 := w1.y - w0.y, w2.y - w0.y
+        r := 1.0 / (x1 * y2 - x2 * y1)
+        t := (e1 * y2 - e2 * y1) * r
+        b := (e2 * x1 - e1 * x2) * r
+        vertex_data[i0].tangent += t
+        vertex_data[i1].tangent += t
+        vertex_data[i2].tangent += t
+        vertex_data[i0].bitangent += b
+        vertex_data[i1].bitangent += b
+        vertex_data[i2].bitangent += b
+    }
+
+    for v in &vertex_data {
         v.tangent = math.normalize(v.tangent)
         v.bitangent = math.normalize(v.bitangent)
-    }*/
+    }
 
     vertex_buffer_size := len(vertex_data) * size_of(vertex_data[0])
     index_buffer_size := len(indices) * size_of(u32)
