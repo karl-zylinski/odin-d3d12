@@ -37,27 +37,47 @@ create_renderable :: proc(renderer_state: ^rd3d12.State, rc_state: ^rc.State, fi
         uv: math.float2,
     }
 
-    vertex_data := make([]Vertex, len(loaded_obj.vertices))
+    vertex_data := make([dynamic]Vertex)
     defer delete(vertex_data)
 
-    for vd, i in &vertex_data {
-        vd.position = loaded_obj.vertices[i]
-    }
-
-    indices := make([]u32, len(loaded_obj.triangles) * 3)
+    indices := make([dynamic]u32)
     defer delete(indices)
 
-    index_idx := 0
+    make_key :: proc(idx: obj.Index) -> u64 {
+        idx_max_size :: 0xfffff
+        assert(idx.vertex < idx_max_size && idx.normal < idx_max_size && idx.uv < idx_max_size, "Vertex key bigger than 0xfffff")
+        return u64(idx.vertex) << 40 + u64(idx.normal) << 20 + u64(idx.uv)
+    }
+
+    vertex_lookup := make(map[u64]int)
+    defer delete(vertex_lookup)
+    index_lookup := make(map[u64]int)
+    defer delete(index_lookup)
+
     for t in loaded_obj.triangles {
         for idx in t.indices {
-            vertex_data[idx.vertex].normal = loaded_obj.normals[idx.normal]
-            vertex_data[idx.vertex].uv = loaded_obj.uvs[idx.uv]
-            indices[index_idx] = u32(idx.vertex)
-            index_idx += 1
+            key := make_key(idx)
+
+            v, v_ok := vertex_lookup[key]
+
+            if v_ok == false {
+                vertex_idx := len(vertex_data)
+
+                append(&vertex_data, Vertex {
+                    position = loaded_obj.vertices[idx.vertex],
+                    normal = loaded_obj.normals[idx.normal],
+                    uv = loaded_obj.uvs[idx.uv],
+                })
+
+                vertex_lookup[key] = vertex_idx
+                append(&indices, u32(vertex_idx))
+            } else {
+                append(&indices, u32(v))
+            }
         }
 
         // tangent & bitangent calc, adapted from Eric Lengyel's C++ code
-        {
+       /* {
             i0 := t.indices[0].vertex
             i1 := t.indices[1].vertex
             i2 := t.indices[2].vertex
@@ -79,13 +99,13 @@ create_renderable :: proc(renderer_state: ^rd3d12.State, rc_state: ^rc.State, fi
             vertex_data[i0].bitangent += b
             vertex_data[i1].bitangent += b
             vertex_data[i2].bitangent += b
-        }
+        }*/
     }
 
-    for v in &vertex_data {
+   /* for v in &vertex_data {
         v.tangent = math.normalize(v.tangent)
         v.bitangent = math.normalize(v.bitangent)
-    }
+    }*/
 
     vertex_buffer_size := len(vertex_data) * size_of(vertex_data[0])
     index_buffer_size := len(indices) * size_of(u32)
@@ -242,28 +262,30 @@ run :: proc() {
             }
         }
 
+        camera_speed := f32(1.0)
+
         if input[0] {
-            camera_pos += math.mul(camera_rot, math.float4{0,0,1,1}).xyz
+            camera_pos += math.mul(camera_rot, math.float4{0,0,1,1}).xyz * camera_speed
         }
 
         if input[1] {
-            camera_pos -= math.mul(camera_rot, math.float4{0,0,1,1}).xyz
+            camera_pos -= math.mul(camera_rot, math.float4{0,0,1,1}).xyz * camera_speed
         }
 
         if input[2] {
-            camera_pos -= math.mul(camera_rot, math.float4{1,0,0,1}).xyz
+            camera_pos -= math.mul(camera_rot, math.float4{1,0,0,1}).xyz * camera_speed
         }
 
         if input[3] {
-            camera_pos += math.mul(camera_rot, math.float4{1,0,0,1}).xyz
+            camera_pos += math.mul(camera_rot, math.float4{1,0,0,1}).xyz * camera_speed
         }
 
         if input[4] {
-            camera_pos -= math.mul(camera_rot, math.float4{0,1,0,1}).xyz
+            camera_pos -= math.mul(camera_rot, math.float4{0,1,0,1}).xyz * camera_speed
         }
 
         if input[5] {
-            camera_pos += math.mul(camera_rot, math.float4{0,1,0,1}).xyz
+            camera_pos += math.mul(camera_rot, math.float4{0,1,0,1}).xyz * camera_speed
         }
 
         camera_trans: math.float4x4 = 1

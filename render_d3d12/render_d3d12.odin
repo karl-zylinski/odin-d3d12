@@ -561,12 +561,17 @@ submit_command_list :: proc(s: ^State, commandlist: ^rc.CommandList) {
                 hr = s.device->CreateCommittedResource(&d3d12.HEAP_PROPERTIES { Type = .DEFAULT, }, .NONE, &texture_desc, .COPY_DEST, nil, d3d12.IResource_UUID, (^rawptr)(&t.res))
                 check(hr, s.info_queue, "Failed creating commited resource")
 
-                tex_size: u64
-                s.device->GetCopyableFootprints(&texture_desc, 0, 1, 0, nil, nil, nil, &tex_size);
+                texture_memory_size: u64
+                num_rows: u32
+                row_sizes_in_byte: u64
+                textureMemorySize: u64
+                layout: d3d12.PLACED_SUBRESOURCE_FOOTPRINT
+
+                s.device->GetCopyableFootprints(&texture_desc, 0, 1, 0, &layout, &num_rows, &row_sizes_in_byte, &texture_memory_size);
 
                 upload_desc := d3d12.RESOURCE_DESC {
                     Dimension = .BUFFER,
-                    Width = u64(tex_size),
+                    Width = texture_memory_size,
                     Height = 1,
                     DepthOrArraySize = 1,
                     MipLevels = 1,
@@ -590,12 +595,16 @@ submit_command_list :: proc(s: ^State, commandlist: ^rc.CommandList) {
 
                 texture_upload_map: rawptr
                 texture_upload->Map(0, &d3d12.RANGE{}, &texture_upload_map)
-                mem.copy(texture_upload_map, c.data, rt.texture_size(c.format, c.width, c.height))
+
+                for height := 0; height < int(num_rows); height += 1
+                {
+                    mem.copy(mem.ptr_offset((^u8)(texture_upload_map), mem.align_forward_int(int(layout.Footprint.RowPitch), d3d12.TEXTURE_DATA_PITCH_ALIGNMENT) * height), mem.ptr_offset((^u8)(c.data), c.width * 4 * height), min(int(layout.Footprint.RowPitch), c.width * 4))
+                }
+
                 texture_upload->Unmap(0, nil)
 
                 copy_location := d3d12.TEXTURE_COPY_LOCATION { pResource = texture_upload, Type = .PLACED_FOOTPRINT }
-
-                s.device->GetCopyableFootprints(&texture_desc, 0, 1, 0, &copy_location.PlacedFootprint, nil, nil, nil);
+                copy_location.PlacedFootprint = layout
 
                 if cmdlist, ok := cmdlist_assert(current_cmdlist); ok {
                     cmdlist->CopyTextureRegion(
@@ -876,13 +885,13 @@ submit_command_list :: proc(s: ^State, commandlist: ^rc.CommandList) {
                     // create a static sampler
                     sampler := d3d12.STATIC_SAMPLER_DESC {
                         Filter = .MIN_MAG_MIP_POINT,
-                        AddressU = .BORDER,
-                        AddressV = .BORDER,
-                        AddressW = .BORDER,
+                        AddressU = .WRAP,
+                        AddressV = .WRAP,
+                        AddressW = .WRAP,
                         MipLODBias = 0,
                         MaxAnisotropy = 0,
-                        ComparisonFunc = .NEVER,
-                        BorderColor = .OPAQUE_WHITE,
+                        ComparisonFunc = .ALWAYS,
+                        BorderColor = .TRANSPARENT_BLACK,
                         MinLOD = 0,
                         MaxLOD = d3d12.FLOAT32_MAX,
                         ShaderRegister = 0,

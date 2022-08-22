@@ -31,7 +31,7 @@ VertexOutput vertex_shader(uint vertex_id : SV_VertexID) {
     output.normal = input.normal;
     output.tangent = input.tangent;
     output.bitangent = input.bitangent;
-    output.uv = input.uv;
+    output.uv = float2(input.uv.x, 1-input.uv.y);
 
     return output;
 }
@@ -41,5 +41,5 @@ float4 pixel_shader(VertexOutput input) : SV_TARGET {
     float3 sun_dir = normalize(get_sun_pos() - input.world_pos);
     float3 sun_dir_tan = float3(dot(sun_dir, input.tangent), dot(sun_dir, input.bitangent), dot(sun_dir, input.normal));
     float3 n = get_normal().Sample(tex_sampler, input.uv).rgb;
-    return float4(n, 1);//clamp(float4(0.9,0.9,0.65,1) * saturate(dot(sun_dir_tan, normalize(n * 2 - 1))), float4(0.2, 0.2, 0.23, 1), float4(1,1,1,1)) * sc * get_tint();
+    return clamp(float4(0.9,0.9,0.65,1) * saturate(dot(sun_dir_tan, normalize(n * 2 - 1))), float4(0.2, 0.2, 0.23, 1), float4(1,1,1,1)) * sc * get_tint();
 };
