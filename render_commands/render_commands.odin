@@ -128,17 +128,19 @@ set_constant :: proc(cmdlist: ^CommandList, name: base.StrHash, offset: int) {
 create_texture :: proc(cmdlist: ^CommandList, format: rt.TextureFormat, width: int, height: int, data: rawptr) -> TextureHandle {
     h := TextureHandle(get_handle(cmdlist.state))
 
-    tx_size := rt.texture_size(format, width, height)
-
     c := CreateTexture {
         handle = h,
-        data = mem.alloc(tx_size),
         width = width,
         height = height,
         format = format,
     }
 
-    mem.copy(c.data, data, tx_size)
+    if data != nil {
+        tx_size := rt.texture_size(format, width, height)
+        c.data = mem.alloc(tx_size)
+        mem.copy(c.data, data, tx_size)
+    }
+    
     append(&cmdlist.commands, c)
     return h
 }
@@ -212,7 +214,11 @@ clear_render_target_pipeline :: proc(cmdlist: ^CommandList, pipeline: PipelineHa
     clear_render_target_handle(cmdlist, AnyHandle(pipeline), color)
 }
 
-clear_render_target :: proc{clear_render_target_handle, clear_render_target_pipeline}
+clear_render_target_texture :: proc(cmdlist: ^CommandList, texture: TextureHandle, color: hlsl.float4) {
+    clear_render_target_handle(cmdlist, AnyHandle(texture), color)
+}
+
+clear_render_target :: proc{clear_render_target_handle, clear_render_target_pipeline, clear_render_target_texture}
 
 set_render_target_handle :: proc(cmdlist: ^CommandList, resource: AnyHandle) {
     append(&cmdlist.commands, SetRenderTarget {
@@ -224,7 +230,11 @@ set_render_target_pipeline :: proc(cmdlist: ^CommandList, pipeline: PipelineHand
     set_render_target_handle(cmdlist, AnyHandle(pipeline))
 }
 
-set_render_target :: proc{set_render_target_handle, set_render_target_pipeline}
+set_render_target_texture :: proc(cmdlist: ^CommandList, texture: TextureHandle) {
+    set_render_target_handle(cmdlist, AnyHandle(texture))
+}
+
+set_render_target :: proc{set_render_target_handle, set_render_target_pipeline, set_render_target_texture}
 
 execute :: proc(cmdlist: ^CommandList) {
     append(&cmdlist.commands, Execute{})
@@ -268,6 +278,7 @@ ResourceState :: enum {
     ConstantBuffer,
     VertexBuffer,
     IndexBuffer,
+    PixelShaderResource,
 }
 
 ResourceTransition :: struct {

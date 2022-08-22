@@ -1,21 +1,16 @@
 TODO:
 
-* fix UV strangeness. Normals seem to get in OK, but UVs seem broken.
-    * Is our processing of obj index hopping wrong?
-    * Or is our sampler broken?
-    * Or is the vertexinput data wrong? Unsure, since the positions are all correct!
-    * NOO. It is due to this: !! https://alextardif.com/D3D11To12P3.html !! I am not doing the upload thingy correct.
+* Render targets, render to off-screen target
+    * Step 1: Render to off-screen target and then fullscreen blit that target to backbuffer (just a test)
+    * Step 2: Render to GBuffer and make it possible to blit out specific parts of GBuffer
+    * Step 3: Assemble picture from GBuffer
+* Lienar color spaces?
 * d3d12 renderer should not be dependent on shader_system. I think?
 * Is BeginPass actually BeginDrawCall and DrawCall -> SubmitDrawCall. Maybe?
 * Move BufferWithNamedOffsets to separate file or sumth
 * Maybe we can move the queue etc to State struct and then have an explicit Swapchain (or whatever it should be called) creation command that returns a handle to it. Then SetRenderTarget etc can take either a resource or a swapchain. Maybe?! We might get rid of Pipeline state struct then, if previous point are also done.
 * Replace delay_destruction with fences that are checked each frame
     * Just a destroy_counter that gets signaled on fence, check how completed it is and release all pending-to-be-destroyed resources that have a lower counter value
-* Render targets, render to off-screen target
-    * Step 1: Render to off-screen target and then fullscreen blit that target to backbuffer (just a test)
-    * Step 2: Render to GBuffer and make it possible to blit out specific parts of GBuffer
-    * Step 3: Assemble picture from GBuffer
-* Lienar color spaces?
 
 DONE:
 
@@ -33,3 +28,8 @@ X ResourceTransition command seems broken. There is no resource to set?
     X p.constant_buffer_desc check the size of this one. Some aligment thing? Shaders need to have enough self-knowledge so we can calculate things like constant_buffer_desc and dsv_desc of Pipeline struct on the fly.
 * Vertex buffers bindless
 * Render something with a normal map and albedo
+* fix UV strangeness. Normals seem to get in OK, but UVs seem broken.
+    * Is our processing of obj index hopping wrong?
+    * Or is our sampler broken?
+    * Or is the vertexinput data wrong? Unsure, since the positions are all correct!
+    * NOO. It is due to this: !! https://alextardif.com/D3D11To12P3.html !! I am not doing the upload thingy correct.

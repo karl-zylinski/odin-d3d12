@@ -554,6 +554,7 @@ submit_command_list :: proc(s: ^State, commandlist: ^rc.CommandList) {
                     DepthOrArraySize = 1,
                     MipLevels = 1,
                     SampleDesc = { Count = 1, Quality = 0, },
+                    Flags = .ALLOW_RENDER_TARGET,
                 }
 
                 t.desc = texture_desc
@@ -569,50 +570,56 @@ submit_command_list :: proc(s: ^State, commandlist: ^rc.CommandList) {
 
                 s.device->GetCopyableFootprints(&texture_desc, 0, 1, 0, &layout, &num_rows, &row_sizes_in_byte, &texture_memory_size);
 
-                upload_desc := d3d12.RESOURCE_DESC {
-                    Dimension = .BUFFER,
-                    Width = texture_memory_size,
-                    Height = 1,
-                    DepthOrArraySize = 1,
-                    MipLevels = 1,
-                    SampleDesc = { Count = 1, Quality = 0, },
-                    Layout = .ROW_MAJOR,
+                if c.data != nil {
+                    upload_desc := d3d12.RESOURCE_DESC {
+                        Dimension = .BUFFER,
+                        Width = texture_memory_size,
+                        Height = 1,
+                        DepthOrArraySize = 1,
+                        MipLevels = 1,
+                        SampleDesc = { Count = 1, Quality = 0, },
+                        Layout = .ROW_MAJOR,
+                    }
+
+                    texture_upload: ^d3d12.IResource
+
+                    hr = s.device->CreateCommittedResource(
+                        &d3d12.HEAP_PROPERTIES { Type = .UPLOAD },
+                        .NONE,
+                        &upload_desc,
+                        .GENERIC_READ,
+                        nil,
+                        d3d12.IResource_UUID, (^rawptr)(&texture_upload))
+
+                    delay_destruction(s, texture_upload, 4)
+
+                    check(hr, s.info_queue, "Failed creating commited resource")
+
+                    texture_upload_map: rawptr
+                    texture_upload->Map(0, &d3d12.RANGE{}, &texture_upload_map)
+
+                    for height := 0; height < int(num_rows); height += 1
+                    {
+                        mem.copy(mem.ptr_offset((^u8)(texture_upload_map), mem.align_forward_int(int(layout.Footprint.RowPitch), d3d12.TEXTURE_DATA_PITCH_ALIGNMENT) * height), mem.ptr_offset((^u8)(c.data), c.width * 4 * height), min(int(layout.Footprint.RowPitch), c.width * 4))
+                    }
+
+                    texture_upload->Unmap(0, nil)
+
+                    copy_location := d3d12.TEXTURE_COPY_LOCATION { pResource = texture_upload, Type = .PLACED_FOOTPRINT }
+                    copy_location.PlacedFootprint = layout
+
+                    if cmdlist, ok := cmdlist_assert(current_cmdlist); ok {
+                        cmdlist->CopyTextureRegion(
+                                &d3d12.TEXTURE_COPY_LOCATION { pResource = t.res },
+                                0, 0, 0, 
+                                &copy_location,
+                                nil)
+
+
+                    }
                 }
-
-                texture_upload: ^d3d12.IResource
-
-                hr = s.device->CreateCommittedResource(
-                    &d3d12.HEAP_PROPERTIES { Type = .UPLOAD },
-                    .NONE,
-                    &upload_desc,
-                    .GENERIC_READ,
-                    nil,
-                    d3d12.IResource_UUID, (^rawptr)(&texture_upload))
-
-                delay_destruction(s, texture_upload, 2)
-
-                check(hr, s.info_queue, "Failed creating commited resource")
-
-                texture_upload_map: rawptr
-                texture_upload->Map(0, &d3d12.RANGE{}, &texture_upload_map)
-
-                for height := 0; height < int(num_rows); height += 1
-                {
-                    mem.copy(mem.ptr_offset((^u8)(texture_upload_map), mem.align_forward_int(int(layout.Footprint.RowPitch), d3d12.TEXTURE_DATA_PITCH_ALIGNMENT) * height), mem.ptr_offset((^u8)(c.data), c.width * 4 * height), min(int(layout.Footprint.RowPitch), c.width * 4))
-                }
-
-                texture_upload->Unmap(0, nil)
-
-                copy_location := d3d12.TEXTURE_COPY_LOCATION { pResource = texture_upload, Type = .PLACED_FOOTPRINT }
-                copy_location.PlacedFootprint = layout
 
                 if cmdlist, ok := cmdlist_assert(current_cmdlist); ok {
-                    cmdlist->CopyTextureRegion(
-                            &d3d12.TEXTURE_COPY_LOCATION { pResource = t.res },
-                            0, 0, 0, 
-                            &copy_location,
-                            nil)
-
                     b := d3d12.RESOURCE_BARRIER {
                         Type = .TRANSITION,
                         Flags = .NONE,
@@ -626,10 +633,9 @@ submit_command_list :: proc(s: ^State, commandlist: ^rc.CommandList) {
                     }
 
                     cmdlist->ResourceBarrier(1, &b);
-
-                    set_resource(s, c.handle, t)
                 }
 
+                set_resource(s, c.handle, t)
                 free(c.data)
             }
             case rc.SetConstantBuffer: {
@@ -1148,53 +1154,79 @@ submit_command_list :: proc(s: ^State, commandlist: ^rc.CommandList) {
             }
 
             case rc.SetRenderTarget: {
-                if cmdlist, ok := cmdlist_assert(current_cmdlist); ok {
-                    rt: ^d3d12.IResource
-                    depth: ^d3d12.IResource
+                rt: ^d3d12.IResource
+                dsv_handle: d3d12.CPU_DESCRIPTOR_HANDLE
 
-                    if p, ok := &s.resources[c.resource].resource.(Pipeline); ok {
-                        frame_index := p->swapchain->GetCurrentBackBufferIndex()
-                        rt = p.backbuffer_states[frame_index].render_target
-                        depth = p.depth
+                #partial switch r in &s.resources[c.resource].resource {
+                    case Pipeline: {
+                        frame_index := r->swapchain->GetCurrentBackBufferIndex()
+                        rt = r.backbuffer_states[frame_index].render_target
+
+                        if cmdlist, ok := cmdlist_assert(current_cmdlist); ok {
+                            dsv_handle = next_dsv_handle(s)
+                            dsv_desc := d3d12.DEPTH_STENCIL_VIEW_DESC {
+                                Format = .D32_FLOAT,
+                                ViewDimension = .TEXTURE2D,
+                            }
+
+                            s.device->CreateDepthStencilView(r.depth, &dsv_desc, dsv_handle)
+                        }
                     }
-
-                    if !fmt.assertf(rt != nil && depth != nil, "Could not resolve render target for resource %v", c.resource) {
+                    case Texture: {
+                        rt = r.res
+                    }
+                    case: {
+                        fmt.printf("SetRenderTarget not implemented for type %v", r)
                         return
                     }
+                }
 
-                    rtv_handle := next_rtv_handle(s)
-                    s.device->CreateRenderTargetView(rt, nil, rtv_handle);
 
-                    dsv_handle := next_dsv_handle(s)
-                    dsv_desc := d3d12.DEPTH_STENCIL_VIEW_DESC {
-                        Format = .D32_FLOAT,
-                        ViewDimension = .TEXTURE2D,
+                if rt != nil {
+                    if cmdlist, ok := cmdlist_assert(current_cmdlist); ok {
+                        rtv_handle := next_rtv_handle(s)
+                        s.device->CreateRenderTargetView(rt, nil, rtv_handle);
+                        cmdlist->OMSetRenderTargets(1, &rtv_handle, false, nil)
                     }
-
-                    s.device->CreateDepthStencilView(depth, &dsv_desc, dsv_handle)
-                    cmdlist->OMSetRenderTargets(1, &rtv_handle, false, &dsv_handle)
                 }
             }
 
-            case rc.ClearRenderTarget:
-                if p, ok := &s.resources[c.resource].resource.(Pipeline); ok {
-                    if cmdlist, ok := cmdlist_assert(current_cmdlist); ok {
-                        rtv_handle := next_rtv_handle(s)
-                        frame_index := p->swapchain->GetCurrentBackBufferIndex()
-                        rt := p.backbuffer_states[frame_index].render_target
-                        s.device->CreateRenderTargetView(rt, nil, rtv_handle)
-                        cmdlist->ClearRenderTargetView(rtv_handle, (^[4]f32)(&c.clear_color), 0, nil)
+            case rc.ClearRenderTarget: {
+                rt: ^d3d12.IResource
 
-                        dsv_handle := next_dsv_handle(s)
-                        dsv_desc := d3d12.DEPTH_STENCIL_VIEW_DESC {
-                            Format = .D32_FLOAT,
-                            ViewDimension = .TEXTURE2D,
+                #partial switch r in &s.resources[c.resource].resource {
+                    case Pipeline: {
+                        frame_index := r->swapchain->GetCurrentBackBufferIndex()
+                        rt = r.backbuffer_states[frame_index].render_target
+
+                        if cmdlist, ok := cmdlist_assert(current_cmdlist); ok {
+                            dsv_handle := next_dsv_handle(s)
+                            dsv_desc := d3d12.DEPTH_STENCIL_VIEW_DESC {
+                                Format = .D32_FLOAT,
+                                ViewDimension = .TEXTURE2D,
+                            }
+
+                            s.device->CreateDepthStencilView(r.depth, &dsv_desc, dsv_handle)
+                            cmdlist->ClearDepthStencilView(dsv_handle, .DEPTH, 1.0, 0, 0, nil);
                         }
-
-                        s.device->CreateDepthStencilView(p.depth, &dsv_desc, dsv_handle)
-                        cmdlist->ClearDepthStencilView(dsv_handle, .DEPTH, 1.0, 0, 0, nil);
+                    }
+                    case Texture: {
+                        rt = r.res
+                    }
+                    case: {
+                        fmt.printf("ClearRenderTarget not implemented for type %v", r)
+                        return
                     }
                 }
+
+                if rt != nil {
+                    if cmdlist, ok := cmdlist_assert(current_cmdlist); ok {
+                        rtv_handle := next_rtv_handle(s)
+                        s.device->CreateRenderTargetView(rt, nil, rtv_handle)
+                        cmdlist->ClearRenderTargetView(rtv_handle, (^[4]f32)(&c.clear_color), 0, nil)
+                    }
+                }
+            }
 
             case rc.DrawCall: {
                 if cmdlist, ok := cmdlist_assert(current_cmdlist); ok {
@@ -1251,6 +1283,9 @@ submit_command_list :: proc(s: ^State, commandlist: ^rc.CommandList) {
                             }
                             res = r.buffer
                             r.state = after
+                        }
+                        case Texture: {
+                            res = r.res
                         }
                         case: {
                             fmt.printf("ResourceTransition not implemented for type %v", r)
@@ -1319,6 +1354,7 @@ ri_to_d3d_state :: proc(ri_state: rc.ResourceState) -> d3d12.RESOURCE_STATES {
         case .ConstantBuffer: return .VERTEX_AND_CONSTANT_BUFFER
         case .VertexBuffer: return .VERTEX_AND_CONSTANT_BUFFER
         case .IndexBuffer: return .INDEX_BUFFER
+        case .PixelShaderResource: return .PIXEL_SHADER_RESOURCE
     }
     return .COMMON
 }
@@ -1327,6 +1363,7 @@ d3d_format :: proc(fmt: rt.TextureFormat) -> dxgi.FORMAT {
     switch fmt {
         case .Unknown: return .UNKNOWN
         case .R8G8B8A8_UNORM: return .R8G8B8A8_UNORM
+        case .R32G32B32A32_FLOAT: return .R32G32B32A32_FLOAT
     }
     return .UNKNOWN
 }

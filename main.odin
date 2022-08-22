@@ -174,7 +174,7 @@ run :: proc() {
     pipeline: rc.PipelineHandle
     shader: rc.ShaderHandle
     constants_buffer: rc.BufferHandle
-    color_tex, normal_tex: rc.TextureHandle
+    color_tex, normal_tex, rt_tex, rt_tex2: rc.TextureHandle
 
     {
         cmdlist := rc.create_command_list(&rc_state)
@@ -197,6 +197,12 @@ run :: proc() {
             }
         }
 
+        rt_tex = rc.create_texture(&cmdlist, .R32G32B32A32_FLOAT, 1200, 1200, nil)
+        rt_tex2 = rc.create_texture(&cmdlist, .R32G32B32A32_FLOAT, 1200, 1200, nil)
+
+        rc.resource_transition(&cmdlist, rt_tex, .PixelShaderResource, .RenderTarget)
+        rc.resource_transition(&cmdlist, rt_tex2, .PixelShaderResource, .RenderTarget)
+
         rc.execute(&cmdlist)
         rd3d12.submit_command_list(&renderer_state, &cmdlist)
     }
@@ -208,6 +214,8 @@ run :: proc() {
     camera_pitch: f32 = 0
     input: [6]bool
     t :f32= 0
+
+    frame_idx := 0
 
     main_loop: for {
         t += 0.016
@@ -323,9 +331,12 @@ run :: proc() {
         rc.set_scissor(&cmdlist, { w = f32(wx), h = f32(wy), })
         rc.set_viewport(&cmdlist, { w = f32(wx), h = f32(wy), })
 
-        rc.resource_transition(&cmdlist, pipeline, .Present, .RenderTarget)
-        rc.clear_render_target(&cmdlist, pipeline, {0, 0, 0, 1})
-        rc.set_render_target(&cmdlist, pipeline)
+        //rt_res := frame_idx % 2 == 0 ? rt_tex : rt_tex2
+        rt_res := pipeline
+
+        rc.resource_transition(&cmdlist, rt_res, .PixelShaderResource, .RenderTarget)
+        rc.clear_render_target(&cmdlist, rt_res, {0, 0, 0, 1})
+        rc.set_render_target(&cmdlist, rt_res)
 
         mvp := calc_mvp(view, &ren)
         rc.buffer_append(&constants, &mvp, base.hash("mvp"))
@@ -339,10 +350,11 @@ run :: proc() {
         }
 
         rc.draw_call(&cmdlist, ren.vertex_buffer, ren.index_buffer)
-        rc.resource_transition(&cmdlist, pipeline, .RenderTarget, .Present)
+        rc.resource_transition(&cmdlist, rt_res, .RenderTarget, .PixelShaderResource)
         rc.execute(&cmdlist)
         rc.present(&cmdlist)
         rd3d12.submit_command_list(&renderer_state, &cmdlist)
+        frame_idx += 1
     }
 
     {
